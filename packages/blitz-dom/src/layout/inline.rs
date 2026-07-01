@@ -3,8 +3,8 @@ use style::values::{computed::CSSPixelLength, generics::text::GenericTextIndent}
 use taffy::{
     AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CollapsibleMarginSet,
     CoreStyle as _, Direction, LayoutInput, LayoutOutput, LayoutPartialTree as _, MaybeMath as _,
-    MaybeResolve as _, NodeId, Overflow, Point, Position, ResolveOrZero as _, RunMode, Size,
-    SizingMode,
+    MaybeResolve as _, NodeId, Overflow, Point, Position, RequestedAxis, ResolveOrZero as _,
+    RunMode, Size, SizingMode,
 };
 
 #[cfg(feature = "floats")]
@@ -443,24 +443,31 @@ impl BaseDocument {
             block_ctx.sub_context(container_pb.top, [container_pb.left, container_pb.right]);
         // block_ctx.apply_content_box_inset([container_pb.left, container_pb.right]);
 
-        // if inputs.run_mode == taffy::RunMode::ComputeSize {
-        //     // Height SHOULD be ignored if RequestedAxis is Horizontal, but currently that doesn't
-        //     // always seem to be the case. So we perform layout to obtain a height every time. We
-        //     // perform layout on a clone of the Layout to avoid clobbering the actual layout which
-        //     // was causing https://github.com/DioxusLabs/blitz/pull/247#issuecomment-3235111617
-        //     //
-        //     // Doing this does seem to be as slow as one might expect, and if it enables correct
-        //     // incremental layout then that is overall a big performance win.
-        //     //
-        //     // FIXME: avoid the need to clone the layout each time
-        //     let mut layout = inline_layout.clone();
-        //     layout.layout.break_all_lines(Some(width));
+        if inputs.run_mode == taffy::RunMode::ComputeSize
+            && inputs.axis == RequestedAxis::Horizontal
+        {
+            // Put layout back
+            self.nodes[node_id]
+                .data
+                .downcast_element_mut()
+                .unwrap()
+                .inline_layout_data = Some(inline_layout);
 
-        //     return taffy::Size {
-        //         width: width.ceil() / scale,
-        //         height: layout.layout.height() / scale,
-        //     };
-        // }
+            let measured_size = inputs.known_dimensions.unwrap_or(taffy::Size {
+                width: width.ceil() / scale,
+                // Height is ignored if RequestedAxis if Horizontal
+                height: 0.0,
+            });
+
+            let clamped_size = inputs
+                .known_dimensions
+                .or(node_size)
+                .unwrap_or(measured_size + content_box_inset.sum_axes())
+                .maybe_clamp(node_min_size, node_max_size)
+                .maybe_max(container_pb.sum_axes().map(Some));
+
+            return LayoutOutput::from_outer_size(clamped_size);
+        }
 
         #[cfg(not(feature = "floats"))]
         {
