@@ -148,6 +148,11 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             scene.fill(Fill::NonZero, Affine::IDENTITY, bg_color, None, &rect);
         }
 
+        // The root clip rectangle is the viewport (in screen coordinates, with the
+        // initial offset already subtracted). Elements outside of this are culled, and
+        // scrollports narrow this rectangle further for their descendants.
+        let viewport_clip_rect = Rect::new(0.0, 0.0, self.width as f64, self.height as f64);
+
         self.render_element(
             scene,
             root_id,
@@ -155,6 +160,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                 x: self.initial_x - (viewport_scroll.x * self.scale),
                 y: self.initial_y - (viewport_scroll.y * self.scale),
             }),
+            viewport_clip_rect,
         );
 
         // Render debug overlay
@@ -186,6 +192,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         scene: &mut impl PaintScene,
         node_id: usize,
         parent_style_transform: Affine,
+        clip_rect: Rect,
     ) {
         let node = &self.dom.as_ref().tree()[node_id];
 
@@ -265,16 +272,20 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             * Affine::translate(box_position)
             * node.transform.unwrap_or_default();
 
-        let screen_bbox = (Affine::translate(Vec2 {
+        let screen_transform = Affine::translate(Vec2 {
             x: -self.initial_x,
             y: -self.initial_y,
-        }) * transform)
-            .transform_rect_bbox(overflow.union(border_box));
+        }) * transform;
+        let screen_bbox = screen_transform.transform_rect_bbox(overflow.union(border_box));
 
-        if screen_bbox.y1 < 0.0 || screen_bbox.y0 > self.height as f64 {
-            return;
-        }
-        if screen_bbox.x1 < 0.0 || screen_bbox.x0 > self.width as f64 {
+        // Cull elements that fall entirely outside the current clip rectangle. In addition to
+        // the viewport, `clip_rect` is narrowed by any ancestor scrollport (see below), so this
+        // also culls elements scrolled out of view inside a clipping/scrolling container.
+        if screen_bbox.x1 < clip_rect.x0
+            || screen_bbox.x0 > clip_rect.x1
+            || screen_bbox.y1 < clip_rect.y0
+            || screen_bbox.y0 > clip_rect.y1
+        {
             return;
         }
 
@@ -293,6 +304,21 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         // Apply CSS transform property (where transforms are 2d)
 
         let mut cx = self.element_cx(node, node.final_layout, transform, custom_widget_scene);
+
+        // If this element clips its overflow it establishes a scrollport: narrow the clip
+        // rectangle passed to descendants to the visible (clipped) region so that content
+        // scrolled out of view is culled rather than drawn and clipped away. The box used
+        // here matches the clip applied to the content below.
+        let child_clip_rect = if should_clip {
+            let clip_box = if is_text_input {
+                cx.frame.content_box_path()
+            } else {
+                cx.frame.padding_box_path()
+            };
+            clip_rect.intersect(screen_transform.transform_rect_bbox(clip_box.bounding_box()))
+        } else {
+            clip_rect
+        };
 
         // Compute clip-path (if any) and wrap all rendering in a clip layer
         let clip_path_shape = cx.clip_path_shape();
@@ -398,7 +424,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                                 cx.draw_text_input_text(scene, content_position);
                                 cx.draw_inline_layout(scene, content_position);
                                 cx.draw_marker(scene, content_position);
-                                cx.draw_children(scene, cx.transform);
+                                cx.draw_children(scene, cx.transform, child_clip_rect);
                             },
                         );
                     },
@@ -416,12 +442,13 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         scene: &mut impl PaintScene,
         node_id: usize,
         parent_style_transform: Affine,
+        clip_rect: Rect,
     ) {
         let node = &self.dom.as_ref().tree()[node_id];
 
         match &node.data {
             NodeData::Element(_) | NodeData::AnonymousBlock(_) => {
-                self.render_element(scene, node_id, parent_style_transform)
+                self.render_element(scene, node_id, parent_style_transform, clip_rect)
             }
             NodeData::Text(TextNodeData { .. }) => {
                 // Text nodes should never be rendered directly
@@ -670,7 +697,12 @@ impl ElementCx<'_, '_> {
         }
     }
 
-    fn draw_children(&self, scene: &mut impl PaintScene, parent_style_transform: Affine) {
+    fn draw_children(
+        &self,
+        scene: &mut impl PaintScene,
+        parent_style_transform: Affine,
+        clip_rect: Rect,
+    ) {
         // Negative z_index hoisted nodes
 
         if let Some(hoisted) = &self.node.stacking_context {
@@ -683,6 +715,7 @@ impl ElementCx<'_, '_> {
                     scene,
                     hoisted_child.node_id,
                     parent_style_transform.pre_translate(pos),
+                    clip_rect,
                 );
             }
         }
@@ -690,7 +723,7 @@ impl ElementCx<'_, '_> {
         // Regular children
         if let Some(children) = &*self.node.paint_children.borrow() {
             for child_id in children {
-                self.render_node(scene, *child_id, parent_style_transform);
+                self.render_node(scene, *child_id, parent_style_transform, clip_rect);
             }
         }
 
@@ -705,6 +738,7 @@ impl ElementCx<'_, '_> {
                     scene,
                     hoisted_child.node_id,
                     parent_style_transform.pre_translate(pos),
+                    clip_rect,
                 );
             }
         }
