@@ -15,10 +15,19 @@ use markup5ever::local_name;
 use std::sync::Arc;
 
 fn doc(html: &str) -> HtmlDocument {
+    doc_scaled(html, 1.0)
+}
+
+fn doc_scaled(html: &str, scale: f32) -> HtmlDocument {
     let mut doc = HtmlDocument::from_html(
         html,
         DocumentConfig {
-            viewport: Some(Viewport::new(400, 400, 1.0, ColorScheme::Light)),
+            viewport: Some(Viewport::new(
+                (400.0 * scale) as u32,
+                (400.0 * scale) as u32,
+                scale,
+                ColorScheme::Light,
+            )),
             html_parser_provider: Some(Arc::new(HtmlProvider) as _),
             ..Default::default()
         },
@@ -93,6 +102,41 @@ fn clicking_summary_toggles_open() {
     click(&mut doc, 40.0, 10.0);
     assert!(!is_open(&doc, "details"), "closed after second click");
     assert_eq!(body_height(&doc, "#body"), 0.0, "body hidden again");
+}
+
+#[test]
+fn summary_hit_area_matches_box_at_hidpi() {
+    // `scrollable_overflow` is stored in device (scaled) pixels while hit-test
+    // coordinates are CSS pixels. Before unscaling it in `Node::hit()`, every
+    // element's hit area was inflated by the HiDPI scale factor, so at 2x the
+    // summary's effective hit area was ~double its box (as seen on
+    // https://gosub.io/faq) and clicks below it would still toggle the details.
+    let mut doc = doc_scaled(
+        r#"<html><body style="margin:0">
+        <details open>
+            <summary style="height:20px;">Summary</summary>
+            <p id="body" style="height:40px; margin-top:40px;">Content</p>
+        </details>
+    </body></html>"#,
+        2.0,
+    );
+
+    assert!(is_open(&doc, "details"));
+
+    let summary = node_id(&doc, "summary");
+    // (40, 30) is below the 20px summary, in the gap created by the content's
+    // top margin. It must not hit-test as the summary.
+    let hit = doc.hit(40.0, 30.0).expect("should hit the details");
+    assert_ne!(
+        hit.node_id, summary,
+        "point below the summary must not hit the summary"
+    );
+
+    click(&mut doc, 40.0, 30.0);
+    assert!(
+        is_open(&doc, "details"),
+        "clicking below the summary must not toggle the details"
+    );
 }
 
 #[test]
