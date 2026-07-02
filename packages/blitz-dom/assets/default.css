@@ -844,6 +844,12 @@ details[open]>summary:first-of-type {
     list-style-type: disclosure-open;
 }
 
+/* When a <details> is closed, only its first <summary> is shown. Everything
+ * else (including any additional summaries) is hidden. */
+details:not([open])>:not(summary:first-of-type) {
+    display: none !important;
+}
+
 /* media elements */
 video {
     object-fit: contain;

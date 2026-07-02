@@ -910,6 +910,7 @@ dependencies = [
  "blitz-paint",
  "blitz-traits",
  "html5ever",
+ "markup5ever",
  "tracing",
  "xml5ever",
 ]

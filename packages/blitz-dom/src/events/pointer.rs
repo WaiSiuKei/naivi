@@ -558,6 +558,33 @@ pub(crate) fn handle_click(
 
                     break 'matched true;
                 }
+                // Activating the first <summary> of a <details> element toggles
+                // the details' `open` attribute (expand/collapse).
+                local_name!("summary") => {
+                    if let Some(parent_id) = doc.nodes[node_id].parent {
+                        let parent = &doc.nodes[parent_id];
+                        let is_first_summary = parent
+                            .data
+                            .is_element_with_tag_name(&local_name!("details"))
+                            && parent.children.iter().copied().find(|&child_id| {
+                                doc.nodes[child_id]
+                                    .data
+                                    .is_element_with_tag_name(&local_name!("summary"))
+                            }) == Some(node_id);
+
+                        if is_first_summary {
+                            doc.toggle_details_open(parent_id);
+                            generate_focus_events(
+                                doc,
+                                &mut |doc| {
+                                    doc.set_focus_to(node_id);
+                                },
+                                dispatch_event,
+                            );
+                            break 'matched true;
+                        }
+                    }
+                }
                 // Clicking labels triggers click, and possibly input event, of associated input
                 local_name!("label") => {
                     if let Some(target_node_id) =

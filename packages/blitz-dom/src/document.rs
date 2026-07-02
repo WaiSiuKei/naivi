@@ -646,6 +646,32 @@ impl BaseDocument {
         }
     }
 
+    /// Toggle the `open` attribute of a `<details>` element, expanding or
+    /// collapsing it. This is the default action triggered when the element's
+    /// first `<summary>` child is activated.
+    pub fn toggle_details_open(&mut self, details_id: usize) {
+        use crate::qual_name;
+
+        let node = &self.nodes[details_id];
+        if !node.data.is_element_with_tag_name(&local_name!("details")) {
+            return;
+        }
+        let is_open = node.data.has_attr(local_name!("open"));
+
+        // Note: HTML attributes are in the empty (null) namespace, so the
+        // QualName must not use the html namespace here, else it won't match
+        // an `open` attribute created by the HTML parser.
+        let mut mutator = self.mutate();
+        if is_open {
+            mutator.clear_attribute(details_id, qual_name!("open"));
+        } else {
+            mutator.set_attribute(details_id, qual_name!("open"), "");
+        }
+        drop(mutator);
+
+        self.shell_provider.request_redraw();
+    }
+
     pub fn set_style_property(&mut self, node_id: usize, name: &str, value: &str) {
         let node = &mut self.nodes[node_id];
         let did_change = node.element_data_mut().unwrap().set_style_property(

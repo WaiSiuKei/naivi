@@ -324,13 +324,14 @@ impl ElementData {
                         if [local_name!("a"), local_name!("area")].contains(&self.name.local) {
                             self.attr(local_name!("href")).is_some()
                         } else {
-                            const DEFAULT_FOCUSSABLE_ELEMENTS: [LocalName; 6] = [
+                            const DEFAULT_FOCUSSABLE_ELEMENTS: [LocalName; 7] = [
                                 local_name!("button"),
                                 local_name!("input"),
                                 local_name!("select"),
                                 local_name!("textarea"),
                                 local_name!("frame"),
                                 local_name!("iframe"),
+                                local_name!("summary"),
                             ];
                             DEFAULT_FOCUSSABLE_ELEMENTS.contains(&self.name.local)
                         }
