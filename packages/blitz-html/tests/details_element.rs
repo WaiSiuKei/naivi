@@ -139,6 +139,52 @@ fn summary_hit_area_matches_box_at_hidpi() {
     );
 }
 
+/// The text content of the given element's `::after` pseudo-element.
+fn after_text(doc: &HtmlDocument, selector: &str) -> Option<String> {
+    let id = node_id(doc, selector);
+    let after_id = doc.get_node(id).unwrap().after?;
+    let text_id = doc.get_node(after_id)?.children.first().copied()?;
+    doc.get_node(text_id)?
+        .text_data()
+        .map(|t| t.content.clone())
+}
+
+#[test]
+fn pseudo_element_content_updates_on_toggle() {
+    // The `content` of a pseudo element is represented as a child text node of
+    // the pseudo element's anonymous node. When the `content` style changes
+    // (here via the `[open]` attribute toggling) the text must be updated.
+    let mut doc = doc(r#"<html><head><style>
+        summary::after { content: "+"; }
+        details[open] > summary::after { content: "-"; }
+    </style></head><body style="margin:0">
+        <details>
+            <summary style="height:20px;">Summary</summary>
+            <p id="body" style="height:40px;">Content</p>
+        </details>
+    </body></html>"#);
+
+    assert_eq!(after_text(&doc, "summary").as_deref(), Some("+"));
+
+    // Open the details by clicking the summary
+    click(&mut doc, 40.0, 10.0);
+    assert!(is_open(&doc, "details"));
+    assert_eq!(
+        after_text(&doc, "summary").as_deref(),
+        Some("-"),
+        "::after content should update when the details is opened"
+    );
+
+    // And close it again
+    click(&mut doc, 40.0, 10.0);
+    assert!(!is_open(&doc, "details"));
+    assert_eq!(
+        after_text(&doc, "summary").as_deref(),
+        Some("+"),
+        "::after content should update when the details is closed"
+    );
+}
+
 #[test]
 fn details_starts_open_when_open_attribute_present() {
     let doc = doc(r#"<html><body style="margin:0">
