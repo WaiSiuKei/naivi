@@ -370,6 +370,7 @@ impl TextInputData {
     ) -> Option<GeneratedTextInputEvent> {
         let editor = &mut self.editor;
         let mut driver = editor.driver(font_ctx, layout_ctx);
+        let is_multiline = self.is_multiline;
 
         match command {
             // Inserting Content
@@ -390,8 +391,12 @@ impl TextInputData {
             }
             // Inserts a newline character.
             "insertNewline:" => {
-                driver.insert_or_replace_selection("\n");
-                return Some(GeneratedTextInputEvent::Input);
+                if is_multiline {
+                    driver.insert_or_replace_selection("\n");
+                    return Some(GeneratedTextInputEvent::Input);
+                } else {
+                    return Some(GeneratedTextInputEvent::Submit);
+                }
             }
             // Inserts a newline character without invoking the field editor’s normal handling to end editing.
             "insertNewlineIgnoringFieldEditor:" => {
