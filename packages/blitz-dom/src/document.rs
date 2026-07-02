@@ -1473,6 +1473,28 @@ impl BaseDocument {
 
     /// Update the device and reset the stylist to process the new size
     pub fn set_stylist_device(&mut self, device: Device) {
+        // Seed the new device with the root element's current style and font-relative
+        // unit state (used to resolve rem/rlh/rex/rch/rcap/ric units). Stylo only
+        // updates this state when the root element's style *changes* during a restyle,
+        // so a freshly-built device would otherwise resolve these units against the
+        // default font-size (16px) until the root's font-size next changes.
+        let root_styles = self
+            .try_root_element()
+            .and_then(|root| root.primary_styles());
+        if let Some(root_style) = root_styles.as_deref() {
+            device.set_root_style(root_style);
+
+            let font = root_style.get_font();
+            let font_size = font.clone_font_size().computed_size();
+            device.set_root_font_size(root_style.effective_zoom.unzoom(font_size.px()));
+
+            let line_height = device
+                .calc_line_height(font, root_style.writing_mode, None)
+                .0;
+            device.set_root_line_height(root_style.effective_zoom.unzoom(line_height.px()));
+        }
+        drop(root_styles);
+
         let origins = {
             let guard = &self.guard;
             let guards = StylesheetGuards {
