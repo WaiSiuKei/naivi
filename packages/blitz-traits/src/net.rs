@@ -163,7 +163,7 @@ impl NetProvider for DummyNetProvider {
 /// The AbortController interface represents a controller object that
 /// allows you to abort one or more Web requests as and when desired.
 ///
-/// https://developer.mozilla.org/en-US/docs/Web/API/AbortController
+/// <https://developer.mozilla.org/en-US/docs/Web/API/AbortController>
 #[derive(Debug, Default)]
 pub struct AbortController {
     pub signal: AbortSignal,
@@ -174,7 +174,7 @@ impl AbortController {
     /// an asynchronous operation before it has completed.
     /// This is able to abort fetch requests.
     ///
-    /// https://developer.mozilla.org/en-US/docs/Web/API/AbortController/abort
+    /// <https://developer.mozilla.org/en-US/docs/Web/API/AbortController/abort>
     pub fn abort(self) {
         self.signal.0.store(true, Ordering::SeqCst);
     }
@@ -184,7 +184,7 @@ impl AbortController {
 /// communicate with an asynchronous operation (such as a fetch request) and
 /// abort it if required via an AbortController object.
 ///
-/// https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal
+/// <https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal>
 #[derive(Debug, Default, Clone)]
 pub struct AbortSignal(Arc<AtomicBool>);
 
@@ -193,7 +193,7 @@ impl AbortSignal {
     /// the asynchronous operations the signal is communicating with are
     /// aborted (true) or not (false).
     ///
-    /// https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/aborted
+    /// <https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/aborted>
     pub fn aborted(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
