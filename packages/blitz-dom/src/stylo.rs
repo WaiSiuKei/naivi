@@ -471,7 +471,7 @@ impl selectors::Element for BlitzNode<'_> {
         _context: &mut MatchingContext<Self::Impl>,
     ) -> bool {
         let pseudo = match self.stylo_element_data.get() {
-            Some(el) => el.styles.primary().pseudo().or_else(|| match &self.data {
+            Some(el) => el.styles.primary().pseudo().or(match &self.data {
                 NodeData::AnonymousBlock(_) => Some(PseudoElement::ServoAnonymousBox),
                 _ => None,
             }),
