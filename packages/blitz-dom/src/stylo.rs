@@ -470,10 +470,15 @@ impl selectors::Element for BlitzNode<'_> {
         pe: &PseudoElement,
         _context: &mut MatchingContext<Self::Impl>,
     ) -> bool {
-        match self.data {
-            NodeData::AnonymousBlock(_) => *pe == PseudoElement::ServoAnonymousBox,
-            _ => false,
-        }
+        let pseudo = match self.stylo_element_data.get() {
+            Some(el) => el.styles.primary().pseudo().or_else(|| match &self.data {
+                NodeData::AnonymousBlock(_) => Some(PseudoElement::ServoAnonymousBox),
+                _ => None,
+            }),
+            None => None,
+        };
+
+        pseudo.is_some_and(|psuedo| psuedo == *pe)
     }
 
     fn apply_selector_flags(&self, flags: ElementSelectorFlags) {
