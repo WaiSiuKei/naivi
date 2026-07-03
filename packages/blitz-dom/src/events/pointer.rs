@@ -598,13 +598,21 @@ pub(crate) fn handle_click(
                     }
                 }
                 local_name!("a") => {
-                    if let Some(href) = el.attr(local_name!("href")) {
-                        if let Some(url) = doc.url.resolve_relative(href) {
-                            doc.navigation_provider.navigate_to(NavigationOptions::new(
-                                url,
-                                None,
-                                doc.id(),
-                            ));
+                    if let Some(href) = el.attr(local_name!("href")).map(str::to_string) {
+                        if let Some(url) = doc.url.resolve_relative(&href) {
+                            // If the link only differs from the current document URL by its
+                            // fragment (this includes links whose href is just `#fragment`),
+                            // perform in-page fragment navigation (scrolling) instead of a
+                            // full navigation.
+                            if url.fragment().is_some() && doc.url.is_same_document(&url) {
+                                doc.scroll_to_fragment(url.fragment().unwrap_or_default());
+                            } else {
+                                doc.navigation_provider.navigate_to(NavigationOptions::new(
+                                    url,
+                                    None,
+                                    doc.id(),
+                                ));
+                            }
                         } else {
                             #[cfg(feature = "tracing")]
                             tracing::warn!("{href} is not parseable as a url. : {:?}", *doc.url);

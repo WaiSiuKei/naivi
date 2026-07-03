@@ -1801,6 +1801,68 @@ impl BaseDocument {
         self.viewport_scroll = scroll;
     }
 
+    /// Find the node targeted by a URL fragment (the `#...` part of a URL).
+    ///
+    /// Per the HTML spec, this is the element whose `id` matches the fragment, falling
+    /// back to the first `<a>` element whose `name` attribute matches.
+    pub fn get_fragment_target(&self, fragment: &str) -> Option<usize> {
+        if let Some(node_id) = self.get_element_by_id(fragment) {
+            return Some(node_id);
+        }
+
+        // Fall back to a named anchor: `<a name="...">`
+        self.nodes.iter().find_map(|(id, node)| {
+            let el = node.element_data()?;
+            (el.name.local == local_name!("a") && el.attr(local_name!("name")) == Some(fragment))
+                .then_some(id)
+        })
+    }
+
+    /// Scroll the viewport so that the given node is aligned with the top of the viewport.
+    pub fn scroll_to_node(&mut self, node_id: usize) {
+        let Some(node) = self.nodes.get(node_id) else {
+            return;
+        };
+
+        // `absolute_position` gives the node's position in document space (it does not
+        // account for the viewport scroll), so it is the scroll offset we want to land on.
+        let target = node.absolute_position(0.0, 0.0);
+        let current = self.viewport_scroll;
+
+        // `scroll_viewport_by` subtracts the delta from the current scroll offset, so pass
+        // `current - target` in order to land on `target`.
+        self.scroll_viewport_by(current.x - target.x as f64, current.y - target.y as f64);
+    }
+
+    /// Scroll to the element targeted by the given URL fragment (the `#...` part of a URL).
+    ///
+    /// An empty fragment (or a `top` fragment that matches no element) scrolls to the top
+    /// of the document, matching browser behaviour. Returns `true` if a scroll target was
+    /// found.
+    pub fn scroll_to_fragment(&mut self, fragment: &str) -> bool {
+        // Fragments are percent-encoded in URLs (e.g. `%20`); decode before matching.
+        let decoded = percent_encoding::percent_decode_str(fragment)
+            .decode_utf8_lossy()
+            .into_owned();
+
+        if !decoded.is_empty() {
+            if let Some(node_id) = self.get_fragment_target(&decoded) {
+                self.scroll_to_node(node_id);
+                return true;
+            }
+        }
+
+        // An empty fragment, or the special "top" fragment when no matching element exists,
+        // scrolls to the top of the document.
+        if decoded.is_empty() || decoded.eq_ignore_ascii_case("top") {
+            let current = self.viewport_scroll;
+            self.scroll_viewport_by(current.x, current.y);
+            return true;
+        }
+
+        false
+    }
+
     /// Computes the size and position of the `Node` relative to the viewport
     pub fn get_client_bounding_rect(&self, node_id: usize) -> Option<BoundingRect> {
         let node = self.get_node(node_id)?;
