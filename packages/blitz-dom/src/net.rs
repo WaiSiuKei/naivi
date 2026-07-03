@@ -556,10 +556,7 @@ mod tests {
     use style::values::specified::Angle;
 
     fn oblique(min_deg: f32, max_deg: f32) -> StyloFontStyle {
-        StyloFontStyle::Oblique(
-            Angle::from_degrees(min_deg, false),
-            Angle::from_degrees(max_deg, false),
-        )
+        StyloFontStyle::Oblique(Angle::from_degrees(min_deg), Angle::from_degrees(max_deg))
     }
 
     #[test]
