@@ -52,6 +52,8 @@ pub struct BlitzDomPainter<'dom, 'a> {
     pub(crate) height: u32,
     pub(crate) initial_x: f64,
     pub(crate) initial_y: f64,
+    /// The id of the document's root element (cached to avoid re-resolving it for every element)
+    pub(crate) root_element_id: Option<usize>,
     pub(crate) layer_manager: LayerManager,
     /// Cached selection ranges for O(1) lookup: node_id -> (start_offset, end_offset)
     pub(crate) selection_ranges: HashMap<usize, (usize, usize)>,
@@ -78,6 +80,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             .collect();
 
         let layer_manager = LayerManager::default();
+        let root_element_id = dom.try_root_element().map(|el| el.id);
 
         Self {
             dom,
@@ -86,6 +89,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             height,
             initial_x,
             initial_y,
+            root_element_id,
             layer_manager,
             selection_ranges,
             custom_widget_scenes,
@@ -239,11 +243,15 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             .element_data()
             .and_then(|el| el.text_input_data())
             .is_some();
-        let should_clip = is_image
-            || is_sub_doc
-            || is_text_input
-            || !matches!(overflow_x, Overflow::Visible)
-            || !matches!(overflow_y, Overflow::Visible);
+        // The root element's overflow is propagated to the viewport (which is clipped by the
+        // window/surface bounds), so the root element must not clip its own overflow.
+        let is_root_element = self.root_element_id == Some(node_id);
+        let should_clip = !is_root_element
+            && (is_image
+                || is_sub_doc
+                || is_text_input
+                || !matches!(overflow_x, Overflow::Visible)
+                || !matches!(overflow_y, Overflow::Visible));
 
         // Apply padding/border offset to inline root
         let taffy::Layout {

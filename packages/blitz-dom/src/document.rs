@@ -1602,6 +1602,28 @@ impl BaseDocument {
         y: f64,
         mut dispatch_event: F,
     ) -> bool {
+        // Per the CSS overflow propagation rules, the root element's overflow (and usually
+        // the <body>'s) is applied to the viewport, and the element itself must not have
+        // a scrolling mechanism of its own. So scrolls that reach the root element are
+        // forwarded to the viewport rather than scrolling the root element itself.
+        if self.try_root_element().is_some_and(|el| el.id == node_id) {
+            let has_changed = self.scroll_viewport_by_has_changed(x, y);
+            if has_changed {
+                let layout = self.root_element().final_layout;
+                let scale = self.viewport.scale() as f64;
+                let event = BlitzScrollEvent {
+                    scroll_top: self.viewport_scroll.y,
+                    scroll_left: self.viewport_scroll.x,
+                    scroll_width: layout.size.width.max(layout.content_size.width) as i32,
+                    scroll_height: layout.size.height.max(layout.content_size.height) as i32,
+                    client_width: (self.viewport.window_size.0 as f64 / scale) as i32,
+                    client_height: (self.viewport.window_size.1 as f64 / scale) as i32,
+                };
+                dispatch_event(DomEvent::new(node_id, DomEventData::Scroll(event)));
+            }
+            return has_changed;
+        }
+
         let Some(node) = self.nodes.get_mut(node_id) else {
             return false;
         };
@@ -1647,18 +1669,12 @@ impl BaseDocument {
             return has_changed;
         }
 
-        let is_html_or_body = node.data.downcast_element().is_some_and(|e| {
-            let tag = &e.name.local;
-            tag == "html" || tag == "body"
-        });
-
         let (can_x_scroll, can_y_scroll) = node
             .primary_styles()
             .map(|styles| {
                 (
                     matches!(styles.clone_overflow_x(), Overflow::Scroll | Overflow::Auto),
-                    matches!(styles.clone_overflow_y(), Overflow::Scroll | Overflow::Auto)
-                        || (styles.clone_overflow_y() == Overflow::Visible && is_html_or_body),
+                    matches!(styles.clone_overflow_y(), Overflow::Scroll | Overflow::Auto),
                 )
             })
             .unwrap_or((false, false));
@@ -1744,20 +1760,21 @@ impl BaseDocument {
 
     /// Scroll the viewport by the given values
     pub fn scroll_viewport_by_has_changed(&mut self, x: f64, y: f64) -> bool {
-        let content_size = self.root_element().final_layout.size;
+        // The viewport scrolls the root element's scrollable overflow, which includes both
+        // the root element itself and any content which overflows it (e.g. when the root
+        // element has a fixed height but its content is taller).
+        let root_layout = &self.root_element().final_layout;
+        let content_width = root_layout.size.width.max(root_layout.content_size.width) as f64;
+        let content_height = root_layout.size.height.max(root_layout.content_size.height) as f64;
         let new_scroll = (self.viewport_scroll.x - x, self.viewport_scroll.y - y);
         let window_width = self.viewport.window_size.0 as f64 / self.viewport.scale() as f64;
         let window_height = self.viewport.window_size.1 as f64 / self.viewport.scale() as f64;
 
         let initial = self.viewport_scroll;
-        self.viewport_scroll.x = f64::max(
-            0.0,
-            f64::min(new_scroll.0, content_size.width as f64 - window_width),
-        );
-        self.viewport_scroll.y = f64::max(
-            0.0,
-            f64::min(new_scroll.1, content_size.height as f64 - window_height),
-        );
+        self.viewport_scroll.x =
+            f64::max(0.0, f64::min(new_scroll.0, content_width - window_width));
+        self.viewport_scroll.y =
+            f64::max(0.0, f64::min(new_scroll.1, content_height - window_height));
 
         self.viewport_scroll != initial
     }
