@@ -631,10 +631,14 @@ impl BaseDocument {
             };
         }
 
-        let measured_size = inputs.known_dimensions.unwrap_or(taffy::Size {
+        // Note: `width` and `height` are content-box measurements of the inline content.
+        // `known_dimensions` must not be substituted in here: those are border-box sizes, and
+        // using them for `content_size` (which adds padding below) would double-count padding,
+        // incorrectly making the container's content overflow it.
+        let measured_size = taffy::Size {
             width: width / scale,
             height: height / scale,
-        });
+        };
 
         let clamped_size = inputs
             .known_dimensions
