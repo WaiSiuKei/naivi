@@ -10,7 +10,7 @@ repository.workspace = true
 publish = true
 
 [features]
-default = ["hybrid", "comrak", "floats", "incremental"]
+default = ["hybrid", "comrak", "floats", "incremental", "scrollbars"]
 
 # Renderers
 gpu = ["dep:anyrender_vello"]
@@ -29,6 +29,7 @@ avif = ["dep:image", "image?/avif-native"]
 comrak = ["dep:comrak"]
 pulldown_cmark = ["dep:pulldown-cmark"]
 floats = ["blitz-dom/floats"]
+scrollbars = ["blitz-dom/scrollbars", "blitz-paint/scrollbars"]
 cache = ["blitz-net/cache"]
 logtime = ["log-frame-times", "log-phase-times"]
 log-frame-times = [

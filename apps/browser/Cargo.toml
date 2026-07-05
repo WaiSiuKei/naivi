@@ -10,7 +10,7 @@ name = "blitz"
 path = "src/main.rs"
 
 [features]
-default = ["hybrid", "floats", "incremental", "cookies", "cache", "screenshot", "capture", "apple-font-embolden"]
+default = ["hybrid", "floats", "incremental", "cookies", "cache", "screenshot", "capture", "apple-font-embolden", "scrollbars"]
 android-defaults = ["skia", "floats", "incremental", "cookies"]
 
 screenshot = ["dep:anyrender_vello_cpu", "dep:blitz-paint", "dep:png", "dep:peniko", "dep:rfd"]
@@ -33,6 +33,7 @@ webp = ["image/webp"]
 tracing = ["dioxus-native/tracing", "blitz-html/tracing", "blitz-net/tracing", "blitz-paint?/tracing", "dep:tracing-subscriber"]
 hot-reload = ["dioxus-native/hot-reload"]
 accessibility = ["dioxus-native/accessibility"]
+scrollbars = ["blitz-dom/scrollbars", "blitz-paint/scrollbars"]
 mimalloc = ["dep:mimalloc"]
 font-embolden = ["dioxus-native/font-embolden"]
 apple-font-embolden = ["dioxus-native/apple-font-embolden"]
