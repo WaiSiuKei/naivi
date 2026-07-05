@@ -12,8 +12,12 @@ use blitz_traits::{
 use keyboard_types::Modifiers;
 use markup5ever::local_name;
 use style::values::computed::UserSelect;
+use taffy::AbsoluteAxis;
 
-use crate::{BaseDocument, node::SpecialElementData};
+use crate::{
+    BaseDocument,
+    node::{ScrollbarRef, SpecialElementData},
+};
 
 use super::focus::generate_focus_events;
 
@@ -46,6 +50,14 @@ pub(crate) struct PanSample {
     pub(crate) dy: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ScrollbarDragState {
+    /// The thumb being dragged
+    pub(crate) scrollbar: ScrollbarRef,
+    /// Last pointer position along the drag axis, in page coordinates
+    pub(crate) last_pos: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum DragMode {
     /// We are not currently dragging
@@ -54,6 +66,8 @@ pub(crate) enum DragMode {
     Selecting,
     /// We are currently panning the document with a drag (probably touch)
     Panning(PanState),
+    /// We are currently dragging a scrollbar thumb
+    ScrollbarDrag(ScrollbarDragState),
 }
 
 impl DragMode {
@@ -204,6 +218,26 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
         return has_changed;
     }
 
+    if let DragMode::ScrollbarDrag(state) = &mut doc.drag_mode {
+        let ScrollbarRef { node_id, axis } = state.scrollbar;
+        let pos = match axis {
+            AbsoluteAxis::Horizontal => x,
+            AbsoluteAxis::Vertical => y,
+        };
+        let delta_px = (pos - state.last_pos) as f64;
+        state.last_pos = pos;
+
+        // Thumb px -> content px. scroll_by uses wheel-delta semantics
+        // (positive delta decreases the offset), so negate.
+        let ratio = doc.nodes[node_id].scrollbar_drag_ratio(axis);
+        let (dx, dy) = match axis {
+            AbsoluteAxis::Horizontal => (-delta_px * ratio, 0.0),
+            AbsoluteAxis::Vertical => (0.0, -delta_px * ratio),
+        };
+        let has_changed = doc.scroll_by(Some(node_id), dx, dy, &mut dispatch_event);
+        return has_changed;
+    }
+
     let Some(hit) = doc.hit(x, y) else {
         return changed;
     };
@@ -288,6 +322,7 @@ pub(crate) fn handle_pointerdown(
     _target: usize,
     x: f32,
     y: f32,
+    button: MouseEventButton,
     mods: Modifiers,
     dispatch_event: &mut dyn FnMut(DomEvent),
 ) {
@@ -317,6 +352,25 @@ pub(crate) fn handle_pointerdown(
         doc.clear_text_selection();
         return;
     };
+
+    // Scrollbar thumb drags take precedence over content interactions and
+    // are not dispatched to the page (matching native scrollbars). A
+    // faded-out thumb doesn't capture: the click goes to the content.
+    if button == MouseEventButton::Main {
+        if let (_, Some(scrollbar)) = doc.hit_with_scrollbar(x, y)
+            && doc.scrollbar_opacity(scrollbar.node_id) > 0.0
+        {
+            doc.drag_mode = DragMode::ScrollbarDrag(ScrollbarDragState {
+                scrollbar,
+                last_pos: match scrollbar.axis {
+                    AbsoluteAxis::Horizontal => x,
+                    AbsoluteAxis::Vertical => y,
+                },
+            });
+            doc.shell_provider.request_redraw();
+            return;
+        }
+    }
 
     // Use hit.node_id for determining the actual clicked element.
     // This may differ from `target` for anonymous blocks (which are layout children
@@ -460,6 +514,13 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     // Don't dispatch click if we were doing a text selection drag or panning
     // the document with a touch
     let do_click = drag_mode == DragMode::None;
+
+    // Repaint so a dragged scrollbar thumb drops its active styling, and
+    // restart its fade-out delay now that the drag no longer holds it shown
+    if let DragMode::ScrollbarDrag(state) = &drag_mode {
+        doc.show_scrollbars(state.scrollbar.node_id);
+        doc.shell_provider.request_redraw();
+    }
 
     let time_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)

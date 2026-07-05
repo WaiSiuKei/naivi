@@ -909,6 +909,20 @@ impl Node {
     /// TODO: z-index
     /// (If multiple children are positioned at the position then a random one will be recursed into)
     pub fn hit(&self, x: f32, y: f32, scale: f64) -> Option<HitResult> {
+        self.hit_inner(x, y, scale, &mut None)
+    }
+
+    /// [`hit`](Self::hit), also resolving the innermost overlay scrollbar
+    /// thumb under the point into `scrollbar` during the same descent (so
+    /// thumb hit-testing shares the exact coordinate handling — transforms
+    /// included — of every other hit test).
+    pub(crate) fn hit_inner(
+        &self,
+        x: f32,
+        y: f32,
+        scale: f64,
+        scrollbar: &mut Option<crate::node::ScrollbarRef>,
+    ) -> Option<HitResult> {
         use style::computed_values::pointer_events::T as PointerEvents;
         use style::computed_values::visibility::T as Visibility;
 
@@ -973,6 +987,17 @@ impl Node {
             return None;
         }
 
+        // Descendants overwrite, so the innermost scroll container's thumb
+        // wins. Thumb coords are border-box relative (unscrolled).
+        if matches_self
+            && let Some(sb) = self.scrollbar_at_local(
+                (x - self.scroll_offset.x as f32) as f64,
+                (y - self.scroll_offset.y as f32) as f64,
+            )
+        {
+            *scrollbar = Some(sb);
+        }
+
         if self.flags.is_inline_root() {
             let content_box_offset = taffy::Point {
                 x: self.final_layout.padding.left + self.final_layout.border.left,
@@ -988,7 +1013,10 @@ impl Node {
                 for hoisted_child in hoisted.pos_z_hoisted_children().rev() {
                     let x = x - hoisted_child.position.x;
                     let y = y - hoisted_child.position.y;
-                    if let Some(hit) = self.with(hoisted_child.node_id).hit(x, y, scale) {
+                    if let Some(hit) = self
+                        .with(hoisted_child.node_id)
+                        .hit_inner(x, y, scale, scrollbar)
+                    {
                         return Some(hit);
                     }
                 }
@@ -997,7 +1025,7 @@ impl Node {
 
         // Call `.hit()` on each child in turn. If any return `Some` then return that value. Else return `Some(self.id).
         for child_id in self.paint_children.borrow().iter().flatten().rev() {
-            if let Some(hit) = self.with(*child_id).hit(x, y, scale) {
+            if let Some(hit) = self.with(*child_id).hit_inner(x, y, scale, scrollbar) {
                 return Some(hit);
             }
         }
@@ -1008,7 +1036,10 @@ impl Node {
                 for hoisted_child in hoisted.neg_z_hoisted_children().rev() {
                     let x = x - hoisted_child.position.x;
                     let y = y - hoisted_child.position.y;
-                    if let Some(hit) = self.with(hoisted_child.node_id).hit(x, y, scale) {
+                    if let Some(hit) = self
+                        .with(hoisted_child.node_id)
+                        .hit_inner(x, y, scale, scrollbar)
+                    {
                         return Some(hit);
                     }
                 }

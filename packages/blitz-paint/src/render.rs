@@ -54,6 +54,11 @@ pub struct BlitzDomPainter<'dom, 'a> {
     pub(crate) initial_y: f64,
     /// The id of the document's root element (cached to avoid re-resolving it for every element)
     pub(crate) root_element_id: Option<usize>,
+    /// Scrollbar hover/drag state, resolved once per scene like the root element
+    #[cfg(feature = "scrollbars")]
+    pub(crate) hovered_scrollbar: Option<blitz_dom::node::ScrollbarRef>,
+    #[cfg(feature = "scrollbars")]
+    pub(crate) scrollbar_drag_target: Option<blitz_dom::node::ScrollbarRef>,
     pub(crate) layer_manager: LayerManager,
     /// Cached selection ranges for O(1) lookup: node_id -> (start_offset, end_offset)
     pub(crate) selection_ranges: HashMap<usize, (usize, usize)>,
@@ -90,6 +95,10 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             initial_x,
             initial_y,
             root_element_id,
+            #[cfg(feature = "scrollbars")]
+            hovered_scrollbar: dom.hovered_scrollbar(),
+            #[cfg(feature = "scrollbars")]
+            scrollbar_drag_target: dom.scrollbar_drag_target(),
             layer_manager,
             selection_ranges,
             custom_widget_scenes,
@@ -435,6 +444,14 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                                 cx.draw_children(scene, cx.transform, child_clip_rect);
                             },
                         );
+
+                        // Overlay scrollbars, drawn unscrolled above the
+                        // clipped content.
+                        #[cfg(feature = "scrollbars")]
+                        {
+                            cx.transform = unscrolled_transform;
+                            cx.draw_scrollbars(scene);
+                        }
                     },
                 );
 
@@ -563,6 +580,131 @@ fn convert_rect(rect: &parley::BoundingBox) -> kurbo::Rect {
 }
 
 impl ElementCx<'_, '_> {
+    /// Paint overlay scrollbar thumbs for scroll containers: `overflow:
+    /// scroll`, or `auto` when the content overflows (never `hidden`/`clip`,
+    /// which scroll only programmatically). Thumbs appear on scroll and fade
+    /// out after a delay ([`BaseDocument::scrollbar_opacity`]); never-scrolled
+    /// containers paint nothing, keeping thumbs out of static reftest
+    /// screenshots.
+    ///
+    /// Geometry comes from [`Node::scrollbar_thumb`], shared with the
+    /// thumb-drag hit testing in blitz-dom.
+    #[cfg(feature = "scrollbars")]
+    fn draw_scrollbars(&self, scene: &mut impl PaintScene) {
+        // css-scrollbars-1 scrollbar-color: author thumb/track colors
+        use blitz_dom::node::{ScrollbarColor, ScrollbarRef};
+        use taffy::AbsoluteAxis;
+        let (custom_thumb, custom_track) = match self.node.scrollbar_color() {
+            ScrollbarColor::Auto => (None, None),
+            ScrollbarColor::Colors { thumb, track } => {
+                (Some(thumb.as_srgb_color()), Some(track.as_srgb_color()))
+            }
+        };
+
+        let drag_target = self.context.scrollbar_drag_target;
+        let hovered_thumb = self.context.hovered_scrollbar;
+
+        // scrollbar-color doesn't affect overlay visibility: persistence is
+        // UA policy, not author styling.
+        let node_id = self.node.id;
+        let opacity = self.context.dom.scrollbar_opacity(node_id);
+        if opacity == 0.0 {
+            return;
+        }
+
+        // Default thumb palette for the used color scheme; thumbs paint as
+        // fill plus a thin contrast stroke so they read over same-colored
+        // content.
+        let dark_scheme =
+            self.context.dom.viewport().color_scheme == blitz_traits::shell::ColorScheme::Dark;
+        let (thumb_rest, thumb_hover, thumb_active, stroke_color) = if dark_scheme {
+            (
+                Color::from_rgba8(214, 214, 214, 178),
+                Color::from_rgba8(190, 190, 190, 222),
+                Color::from_rgba8(172, 172, 172, 255),
+                Color::from_rgba8(0, 0, 0, 102),
+            )
+        } else {
+            (
+                Color::from_rgba8(128, 128, 128, 178),
+                Color::from_rgba8(152, 152, 152, 222),
+                Color::from_rgba8(170, 170, 170, 255),
+                Color::from_rgba8(255, 255, 255, 102),
+            )
+        };
+
+        // Chromium's hovered/pressed scrollbar contrast ratios.
+        const HOVER_CONTRAST: f32 = 1.8;
+        const ACTIVE_CONTRAST: f32 = 1.3;
+
+        for axis in [AbsoluteAxis::Vertical, AbsoluteAxis::Horizontal] {
+            if !self.node.wants_scrollbar(axis) {
+                continue;
+            }
+            let Some(thumb) = self.node.scrollbar_thumb(axis) else {
+                continue;
+            };
+
+            let rect = thumb.scale_from_origin(self.scale);
+
+            // Track (only when the author specified a track color)
+            if let Some(track_color) = custom_track {
+                let padding_box = self.frame.padding_box;
+                let track_rect = match axis {
+                    AbsoluteAxis::Horizontal => {
+                        Rect::new(padding_box.x0, rect.y0, padding_box.x1, rect.y1)
+                    }
+                    AbsoluteAxis::Vertical => {
+                        Rect::new(rect.x0, padding_box.y0, rect.x1, padding_box.y1)
+                    }
+                };
+                scene.fill(
+                    Fill::NonZero,
+                    self.transform,
+                    track_color.multiply_alpha(opacity),
+                    None,
+                    &track_rect,
+                );
+            }
+
+            let this = ScrollbarRef { node_id, axis };
+            let is_active = drag_target == Some(this);
+            let is_hovered = hovered_thumb == Some(this);
+            let color = match custom_thumb {
+                Some(base) if is_active => crate::color::blend_for_contrast(base, ACTIVE_CONTRAST),
+                Some(base) if is_hovered => crate::color::blend_for_contrast(base, HOVER_CONTRAST),
+                Some(base) => base,
+                None if is_active => thumb_active,
+                None if is_hovered => thumb_hover,
+                None => thumb_rest,
+            };
+            let radius = match axis {
+                AbsoluteAxis::Horizontal => rect.height() / 2.0,
+                AbsoluteAxis::Vertical => rect.width() / 2.0,
+            };
+            scene.fill(
+                Fill::NonZero,
+                self.transform,
+                color.multiply_alpha(opacity),
+                None,
+                &rect.to_rounded_rect(radius),
+            );
+            // Contrast stroke, default thumbs only: an author-specified
+            // scrollbar-color is rendered exactly as given.
+            if custom_thumb.is_none() {
+                let stroke_width = self.scale;
+                let stroke_rect = rect.inset(-stroke_width / 2.0);
+                scene.stroke(
+                    &Stroke::new(stroke_width),
+                    self.transform,
+                    stroke_color.multiply_alpha(opacity),
+                    None,
+                    &stroke_rect.to_rounded_rect(radius - stroke_width / 2.0),
+                );
+            }
+        }
+    }
+
     fn draw_inline_layout(&self, scene: &mut impl PaintScene, pos: Point) {
         if self.node.flags.is_inline_root() {
             let text_layout = self.element
