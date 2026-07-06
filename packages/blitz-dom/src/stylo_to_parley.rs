@@ -12,6 +12,7 @@ pub(crate) mod stylo {
     pub(crate) use style::properties::ComputedValues;
     pub(crate) use style::values::computed::OverflowWrap;
     pub(crate) use style::values::computed::WordBreak;
+    pub(crate) use style::values::computed::font::FontFeatureSettings;
     pub(crate) use style::values::computed::font::FontStretch;
     pub(crate) use style::values::computed::font::FontStyle;
     pub(crate) use style::values::computed::font::FontVariationSettings;
@@ -22,6 +23,7 @@ pub(crate) mod stylo {
 }
 
 pub(crate) mod parley {
+    pub(crate) use parley::FontFeature;
     pub(crate) use parley::FontVariation;
     pub(crate) use parley::fontique::QueryFamily;
     pub(crate) use parley::setting::*;
@@ -92,6 +94,17 @@ pub(crate) fn font_variations(input: &stylo::FontVariationSettings) -> Vec<parle
         .collect()
 }
 
+pub(crate) fn font_features(input: &stylo::FontFeatureSettings) -> Vec<parley::FontFeature> {
+    input
+        .0
+        .iter()
+        .map(|v| parley::FontFeature {
+            tag: parley::Tag::from_bytes(v.tag.0.to_be_bytes()),
+            value: v.value as u16,
+        })
+        .collect()
+}
+
 pub(crate) fn white_space_collapse(input: stylo::WhiteSpaceCollapse) -> parley::WhiteSpaceCollapse {
     match input {
         stylo::WhiteSpaceCollapse::Collapse => parley::WhiteSpaceCollapse::Collapse,
@@ -134,6 +147,7 @@ pub(crate) fn style(
     let font_style = self::font_style(font_styles.font_style);
     let font_width = self::font_width(font_styles.font_stretch);
     let font_variations = self::font_variations(&font_styles.font_variation_settings);
+    let font_features = self::font_features(&font_styles.font_feature_settings);
 
     // Convert font family
     let families: Vec<_> = font_styles
@@ -193,7 +207,7 @@ pub(crate) fn style(
         font_style,
         font_weight,
         font_variations: parley::FontVariations::List(Cow::Owned(font_variations)),
-        font_features: parley::FontFeatures::List(Cow::Borrowed(&[])),
+        font_features: parley::FontFeatures::List(Cow::Owned(font_features)),
         locale: Default::default(),
         line_height,
         word_spacing,
