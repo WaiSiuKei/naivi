@@ -201,7 +201,7 @@ impl BaseDocument {
                             },
                             #[cfg(feature = "svg")]
                             ImageData::Svg(svg) => {
-                                let size = svg.size();
+                                let size = svg.tree.size();
                                 taffy::Size {
                                     width: size.width(),
                                     height: size.height(),

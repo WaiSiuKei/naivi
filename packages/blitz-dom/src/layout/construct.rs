@@ -370,13 +370,14 @@ pub(crate) fn collect_layout_children(
                 doc.nodes[id].remove_damage(CONSTRUCT_BOX | CONSTRUCT_DESCENDENT | CONSTRUCT_FC);
             });
 
-            match crate::util::parse_svg(outer_html.as_bytes()) {
+            match crate::util::parse_svg_image(outer_html.as_bytes()) {
                 Ok(svg) => {
                     doc.get_node_mut(container_node_id)
                         .unwrap()
                         .element_data_mut()
                         .unwrap()
-                        .special_data = SpecialElementData::Image(Box::new(svg.into()));
+                        .special_data =
+                        SpecialElementData::Image(Box::new(crate::node::ImageData::Svg(svg)));
                 }
                 Err(err) => {
                     #[cfg(feature = "tracing")]

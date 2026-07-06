@@ -1083,9 +1083,9 @@ impl BaseDocument {
                 self.apply_loaded_image(url, image);
             }
             #[cfg(feature = "svg")]
-            Resource::Svg(_kind, tree) => {
+            Resource::Svg(_kind, svg) => {
                 // Create the ImageData and cache it
-                let image = ImageData::Svg(tree);
+                let image = ImageData::Svg(svg);
 
                 let Some(url) = res.resolved_url.as_ref() else {
                     return;

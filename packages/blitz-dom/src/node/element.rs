@@ -240,7 +240,7 @@ impl ElementData {
     #[cfg(feature = "svg")]
     pub fn svg_data(&self) -> Option<&usvg::Tree> {
         match self.image_data()? {
-            ImageData::Svg(data) => Some(data),
+            ImageData::Svg(data) => Some(&data.tree),
             _ => None,
         }
     }
@@ -496,18 +496,43 @@ impl RasterImageData {
     }
 }
 
+/// A parsed SVG image together with its CSS intrinsic dimensions.
+///
+/// usvg always resolves the root `<svg>` to a concrete [`usvg::Tree::size`],
+/// falling back to the `viewBox` size when `width`/`height` are absent or given
+/// as percentages. For CSS sizing purposes, however, such an SVG has *no*
+/// intrinsic width/height (only an intrinsic aspect ratio). We record which
+/// dimensions were actually declared as absolute lengths so the paint layer can
+/// apply the CSS default sizing algorithm correctly.
+#[cfg(feature = "svg")]
+#[derive(Debug, Clone)]
+pub struct SvgImageData {
+    /// The parsed SVG tree.
+    pub tree: Arc<usvg::Tree>,
+    /// The intrinsic width in CSS px, present only when the root `<svg>`
+    /// declared an absolute (non-percentage) `width`.
+    pub intrinsic_width: Option<f32>,
+    /// The intrinsic height in CSS px, present only when the root `<svg>`
+    /// declared an absolute (non-percentage) `height`.
+    pub intrinsic_height: Option<f32>,
+}
+
+#[cfg(feature = "svg")]
+impl SvgImageData {
+    /// The intrinsic aspect ratio of the SVG (always available: usvg resolves
+    /// the `viewBox` or declared size into a non-zero [`usvg::Tree::size`]).
+    pub fn aspect_ratio(&self) -> f32 {
+        let size = self.tree.size();
+        size.width() / size.height()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ImageData {
     Raster(RasterImageData),
     #[cfg(feature = "svg")]
-    Svg(Arc<usvg::Tree>),
+    Svg(SvgImageData),
     None,
-}
-#[cfg(feature = "svg")]
-impl From<usvg::Tree> for ImageData {
-    fn from(value: usvg::Tree) -> Self {
-        Self::Svg(Arc::new(value))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

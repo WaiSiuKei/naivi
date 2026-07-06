@@ -14,6 +14,8 @@ pub use attributes::{Attribute, Attributes};
 pub use custom_widget::{
     ComputedStyles, CustomWidgetData, CustomWidgetStatus, ProxyRenderContext, Widget,
 };
+#[cfg(feature = "svg")]
+pub use element::SvgImageData;
 pub use element::{
     CanvasData, ElementData, ImageData, ImageResourceData, ListItemLayout, ListItemLayoutPosition,
     Marker, RasterImageData, SpecialElementData, SpecialElementType, Status,

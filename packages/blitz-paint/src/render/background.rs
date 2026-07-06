@@ -288,12 +288,33 @@ impl ElementCx<'_, '_> {
         let frame_w = (self.frame.padding_box.width() / self.scale) as f32;
         let frame_h = (self.frame.padding_box.height() / self.scale) as f32;
 
-        let svg_size = svg.size();
+        let svg_size = svg.tree.size();
+
+        // Compute the SVG's concrete object size per the CSS default sizing
+        // algorithm. usvg resolves an SVG that lacks explicit `width`/`height`
+        // to its `viewBox` size, but such an image has only an intrinsic aspect
+        // ratio (no intrinsic dimensions). Passing this size to
+        // `compute_layer_size` for the `background-size: auto` case supplies
+        // both the concrete size (used verbatim for `auto`) and the aspect
+        // ratio (used by `cover`/`contain` and single-`auto` sizes).
+        let aspect_ratio = svg.aspect_ratio();
+        let (object_w, object_h) = match (svg.intrinsic_width, svg.intrinsic_height) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, w / aspect_ratio),
+            (None, Some(h)) => (h * aspect_ratio, h),
+            (None, None) => {
+                // No intrinsic dimensions: scale the aspect ratio to fit
+                // ("contain") within the background positioning area.
+                let scale = (frame_w / svg_size.width()).min(frame_h / svg_size.height());
+                (svg_size.width() * scale, svg_size.height() * scale)
+            }
+        };
+
         let bg_size = compute_layer_size(
             layer,
             frame_w,
             frame_h,
-            BackgroundSizeComputeMode::Size(svg_size.width(), svg_size.height()),
+            BackgroundSizeComputeMode::Size(object_w, object_h),
         );
 
         let x_ratio = (bg_size.width / svg_size.width() as f64) * self.scale;
@@ -309,7 +330,7 @@ impl ElementCx<'_, '_> {
             * kurbo::Affine::translate((bg_pos.x * self.scale, bg_pos.y * self.scale))
             * Affine::scale_non_uniform(x_ratio, y_ratio);
 
-        anyrender_svg::render_svg_tree(scene, svg, transform);
+        anyrender_svg::render_svg_tree(scene, &svg.tree, transform);
     }
 
     fn draw_raster_image_layer(&self, scene: &mut impl PaintScene, layer: &ImageLayerStyles) {

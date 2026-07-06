@@ -912,6 +912,7 @@ dependencies = [
  "html5ever",
  "markup5ever",
  "tracing",
+ "usvg",
  "xml5ever",
 ]
 
