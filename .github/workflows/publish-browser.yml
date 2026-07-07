@@ -28,6 +28,8 @@ env:
   # PRERELEASE_TAG: ${{ github.event.inputs.channel == 'main' && '-pre' || '' }}
   RELEASE_TAG: ${{ github.event.inputs.channel }}
   RELEASE_POST: ${{ github.event.inputs.post }}
+  # Limit parallism to debug possible OOM
+  CARGO_BUILD_JOBS: 2
 
 jobs:
   release-cli:
