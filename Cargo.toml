@@ -238,16 +238,6 @@ log-frame-times = ["dioxus-native/log-frame-times"]
 log-phase-times = ["dioxus-native/log-phase-times"]
 
 [dev-dependencies]
-wgpu = "=29.0.3"
-wgpu-core = "=29.0.3"
-wgpu-hal = "=29.0.3"
-wgpu-core-deps-apple = "=29.0.3"
-wgpu-core-deps-emscripten = "=29.0.3"
-wgpu-core-deps-wasm = "=29.0.3"
-wgpu-core-deps-windows-linux-android = "=29.0.3"
-wgpu-types = "=29.0.3"
-wgpu-naga-bridge = "=29.0.3"
-naga = "=29.0.3"
 anyrender = { workspace = true }
 anyrender_vello = { workspace = true }
 anyrender_vello_cpu = { workspace = true, features = ["multithreading"] }
