@@ -133,9 +133,9 @@ jobs:
       #   if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
       #   uses: ilammy/setup-nasm@v1
 
-      # - name: Free Disk Space
-      #   if: ${{ matrix.platform.os == 'ubuntu-24.04' || matrix.platform.os == 'ubuntu-24.04-arm' }}
-      #   uses: ./.github/actions/free-disk-space
+      - name: Free Disk Space
+        if: ${{ matrix.platform.os == 'ubuntu-24.04' || matrix.platform.os == 'ubuntu-24.04-arm' }}
+        uses: ./.github/actions/free-disk-space
 
       - uses: awalsh128/cache-apt-pkgs-action@latest
         if: ${{ startsWith(matrix.platform.os, 'ubuntu') }}
