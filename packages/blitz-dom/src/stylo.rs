@@ -877,6 +877,38 @@ impl<'a> TElement for BlitzNode<'a> {
             Some(LengthPercentage::Length(NoCalcLength::from_px(val)))
         }
 
+        /// Parse the value of an SVG `width`/`height` presentation attribute.
+        /// Unlike the legacy HTML dimension attributes, these accept any CSS
+        /// <length-percentage> (e.g. `1em`), and a unitless number means user
+        /// units, which map to CSS px.
+        fn parse_svg_size_attr(value: &str) -> Option<style::values::specified::LengthPercentage> {
+            use style::values::specified::{LengthPercentage, NoCalcLength};
+            use style_traits::ParsingMode;
+
+            let value = value.trim();
+            if let Some(number) = value.strip_suffix('%') {
+                let val: f32 = number.trim().parse().ok()?;
+                return (val >= 0.0)
+                    .then(|| LengthPercentage::Percentage(NoCalcPercentage::new(val / 100.0)));
+            }
+
+            // Split into number and unit: the unit is the trailing run of
+            // ASCII alphabetic characters (this never eats into a scientific
+            // exponent such as `1e3`, which ends in a digit).
+            let number_len = value
+                .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+                .len();
+            let (number, unit) = value.split_at(number_len);
+            let val: f32 = number.trim().parse().ok().filter(|v| *v >= 0.0)?;
+            let length = if unit.is_empty() {
+                NoCalcLength::from_px(val)
+            } else {
+                NoCalcLength::parse_dimension_with_flags(ParsingMode::DEFAULT, false, val, unit)
+                    .ok()?
+            };
+            Some(LengthPercentage::Length(length))
+        }
+
         for attr in elem.attrs() {
             let name = &attr.name.local;
             let value = attr.value.as_str();
@@ -925,6 +957,25 @@ impl<'a> TElement for BlitzNode<'a> {
                     push_style(PropertyDeclaration::Height(Size::LengthPercentage(
                         NonNegative(height),
                     )));
+                }
+            }
+
+            // https://svgwg.org/svg2-draft/geometry.html#Sizing
+            // The `width` and `height` attributes on an `<svg>` element are
+            // presentation attributes that map to the CSS `width`/`height`
+            // properties, so e.g. `width="1em"` must resolve against the
+            // element's font-size like any other CSS length.
+            if *tag == local_name!("svg")
+                && (*name == local_name!("width") || *name == local_name!("height"))
+            {
+                if let Some(size) = parse_svg_size_attr(value) {
+                    use style::values::generics::{NonNegative, length::Size};
+                    let size = Size::LengthPercentage(NonNegative(size));
+                    push_style(if *name == local_name!("width") {
+                        PropertyDeclaration::Width(size)
+                    } else {
+                        PropertyDeclaration::Height(size)
+                    });
                 }
             }
 
