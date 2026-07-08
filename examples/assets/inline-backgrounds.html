@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body {
+        font-family: sans-serif;
+        background: #f5f5f5;
+        margin: 0;
+        padding: 24px;
+        color: #222;
+        line-height: 1.8;
+    }
+    h1 {
+        margin-top: 0;
+    }
+    h2 {
+        font-size: 16px;
+        color: #555;
+        margin-bottom: 8px;
+    }
+    section {
+        background: white;
+        padding: 20px 24px;
+        margin-bottom: 24px;
+    }
+    p {
+        margin: 0 0 12px;
+        font-size: 18px;
+    }
+    p:last-child {
+        margin-bottom: 0;
+    }
+
+    /* Basic solid inline backgrounds */
+    .highlight     { background: #fff3bf; }
+    .marker        { background: #d3f9d8; }
+    .tag           { background: #d6336c; color: white; }
+    .code          { background: #e9ecef; font-family: monospace; }
+
+    /* Semi-transparent background (tests correct alpha, no double-paint) */
+    .translucent   { background: rgba(214, 51, 108, 0.35); }
+
+    /* Nested spans: inner span sits on top of surrounding text run */
+    .outer         { background: #d0ebff; }
+    .inner         { background: #ffec99; }
+
+    /* Different font sizes exercise per-run ascent/descent */
+    .big           { background: #ffd8a8; font-size: 28px; }
+    .small         { background: #c5f6fa; font-size: 12px; }
+
+    /* Bold / italic runs */
+    .bold          { background: #eebefa; font-weight: bold; }
+    .italic        { background: #b2f2bb; font-style: italic; }
+</style>
+</head>
+<body>
+    <h1>Inline element backgrounds</h1>
+
+    <section>
+        <h2>Solid backgrounds on inline spans</h2>
+        <p>
+            The quick brown fox jumps over the
+            <span class="highlight">highlighted lazy dog</span> while a
+            <span class="marker">green marker</span> trails behind. You can also
+            wrap a <span class="tag">colored tag</span> or some
+            <span class="code">inline_code()</span> in the middle of a sentence.
+        </p>
+    </section>
+
+    <section>
+        <h2>Backgrounds that wrap across multiple lines</h2>
+        <p>
+            Here is a <span class="highlight">longer highlighted phrase that is
+            deliberately long enough to wrap onto a second (and possibly third)
+            line so that each line fragment of the span gets its own background
+            rectangle</span>, which is exactly how browsers paint inline
+            backgrounds per line box.
+        </p>
+    </section>
+
+    <section>
+        <h2>Semi-transparent background</h2>
+        <p>
+            This <span class="translucent">span uses a 35% opaque background</span>,
+            which verifies the color is painted once (not doubled) and blends
+            correctly with what is behind it.
+        </p>
+    </section>
+
+    <section>
+        <h2>Nested inline spans</h2>
+        <p>
+            An <span class="outer">outer span with a blue background containing an
+            <span class="inner">inner yellow span</span> and more outer text</span>
+            after it.
+        </p>
+    </section>
+
+    <section>
+        <h2>Mixed font sizes and styles</h2>
+        <p>
+            A line mixing <span class="big">big text</span>, some
+            <span class="small">tiny text</span>, a run of
+            <span class="bold">bold text</span> and finally some
+            <span class="italic">italic text</span> — each background hugs its own
+            font metrics.
+        </p>
+    </section>
+</body>
+</html>

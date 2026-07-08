@@ -717,6 +717,16 @@ impl ElementCx<'_, '_> {
             let transform =
                 self.transform * Affine::translate((pos.x * self.scale, pos.y * self.scale));
 
+            // Render inline element backgrounds (e.g. `<span style="background: ...">`)
+            // behind the text and selection highlight.
+            crate::text::draw_inline_backgrounds(
+                scene,
+                text_layout.layout.lines(),
+                self.context.dom,
+                transform,
+                self.node.id,
+            );
+
             // Render text selection highlight (if any) using cached selection ranges
             if let Some(&(sel_start, sel_end)) = self.context.selection_ranges.get(&self.node.id) {
                 crate::text::draw_text_selection(
