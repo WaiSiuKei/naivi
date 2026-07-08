@@ -599,6 +599,12 @@ impl InteractionLocation for NativeWheelData {
     }
 }
 
+pub fn synthetic_click_event(node: &Node, modifiers: Modifiers) -> Box<dyn Any> {
+    Box::new(NativePointerData(
+        node.synthetic_click_event_data(modifiers),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
