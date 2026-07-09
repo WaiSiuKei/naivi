@@ -90,9 +90,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: List Android NDK files
-        run: find "$ANDROID_NDK_HOME"
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
