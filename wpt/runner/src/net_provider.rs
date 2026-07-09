@@ -75,7 +75,7 @@ impl<D: Send + Sync + 'static> WptNetProvider<D> {
                     .unwrap_or(request.url.path());
                 let path = self.base_path.join(relative_path);
                 let file_content = std::fs::read(&path).inspect_err(|err| {
-                    eprintln!("Error loading {}: {}", path.display(), &err);
+                    eprintln!("Error loading {}: {}", path.display(), err);
                     callback.queue.record_failure(request_id);
                 })?;
                 catch_unwind(AssertUnwindSafe(|| {

@@ -261,14 +261,14 @@ struct TestResult {
 impl TestResult {
     fn print_to(&self, mut out: impl Write) {
         let result_str = if supports_hyperlinks() {
-            let url = format!("https://wpt.live/{}", &self.name);
+            let url = format!("https://wpt.live/{}", self.name);
             let link = Link::new(&self.name, &url);
             format!(
                 "{} ({}/{}) {} ({}ms) ",
                 self.status.as_str(),
                 self.subtest_counts.pass,
                 self.subtest_counts.total,
-                &link,
+                link,
                 self.duration.as_millis(),
             )
         } else {
@@ -277,7 +277,7 @@ impl TestResult {
                 self.status.as_str(),
                 self.subtest_counts.pass,
                 self.subtest_counts.total,
-                &self.name,
+                self.name,
                 self.duration.as_millis(),
             )
         };

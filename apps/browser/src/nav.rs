@@ -10,7 +10,7 @@ pub fn req_from_string(url_s: &str) -> Option<Request> {
     let contains_space = url_s.contains(' ');
     let contains_dot = url_s.contains('.');
     if contains_dot && !contains_space {
-        if let Ok(url) = Url::parse(&format!("https://{}", &url_s)) {
+        if let Ok(url) = Url::parse(&format!("https://{}", url_s)) {
             return Some(Request::get(url));
         }
     }

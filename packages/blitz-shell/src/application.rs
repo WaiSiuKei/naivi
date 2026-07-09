@@ -112,7 +112,7 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
 impl<Rend: WindowRenderer> ApplicationHandler for BlitzApplication<Rend> {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         // Resume existing windows
-        for (_, view) in self.windows.iter_mut() {
+        for view in self.windows.values_mut() {
             view.resume();
         }
 
@@ -128,7 +128,7 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlitzApplication<Rend> {
     }
 
     fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        for (_, view) in self.windows.iter_mut() {
+        for view in self.windows.values_mut() {
             view.suspend();
         }
     }

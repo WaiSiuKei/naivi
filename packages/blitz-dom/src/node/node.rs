@@ -718,7 +718,7 @@ impl Node {
                 write!(
                     s,
                     "TEXT {}",
-                    &std::str::from_utf8(bytes.split_at(10.min(bytes.len())).0)
+                    std::str::from_utf8(bytes.split_at(10.min(bytes.len())).0)
                         .unwrap_or("INVALID UTF8")
                 )
             }
@@ -1095,10 +1095,8 @@ impl Node {
             if node.flags.is_inline_root() {
                 return Some(node);
             }
-            match node.layout_parent.get() {
-                Some(id) => node = self.with(id),
-                None => return None,
-            }
+            let id = node.layout_parent.get()?;
+            node = self.with(id);
         }
     }
 
