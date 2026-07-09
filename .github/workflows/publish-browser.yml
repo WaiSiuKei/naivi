@@ -136,14 +136,13 @@ jobs:
       #   if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
       #   uses: ilammy/setup-nasm@v1
 
-      # - name: Free Disk Space (Ubuntu)
-      #   if: ${{ matrix.platform.os == 'ubuntu-24.04' || matrix.platform.os == 'ubuntu-24.04-arm' }}
-      #   uses: jlumbroso/free-disk-space@v1.3.1
-      #   with: # speed things up a bit
-      #     android: false
-      #     large-packages: false
-      #     docker-images: false
-      #     swap-storage: false
+      - name: Free Disk Space (Ubuntu)
+        if: ${{ matrix.platform.os == 'ubuntu-24.04' || matrix.platform.os == 'ubuntu-24.04-arm' }}
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with: # speed things up a bit
+          android: false
+          large-packages: false
+          swap-storage: false
 
       - uses: awalsh128/cache-apt-pkgs-action@latest
         if: ${{ startsWith(matrix.platform.os, 'ubuntu') }}
