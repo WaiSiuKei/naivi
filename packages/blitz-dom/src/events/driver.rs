@@ -354,6 +354,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             | DomEventData::MouseOut(data)
             | DomEventData::TouchStart(data)
             | DomEventData::TouchEnd(data)
+            | DomEventData::TouchMove(data)
             | DomEventData::TouchCancel(data)
             | DomEventData::Click(data)
             | DomEventData::ContextMenu(data)
