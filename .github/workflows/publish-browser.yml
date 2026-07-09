@@ -30,6 +30,7 @@ env:
   RELEASE_POST: ${{ github.event.inputs.post }}
   # Limit parallism to debug possible OOM
   CARGO_BUILD_JOBS: 2
+  CARGO_LOG: trace
 
 jobs:
   release-cli:
@@ -69,13 +70,13 @@ jobs:
           - job_name: Linux (x86_64)
             target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
-            use_git_cli: true
+            use_git_cli: false
             artifact_name: "Blitz_0.0.0_linux_x86_64.AppImage"
             artifact_path: ./target/dx/blitz/bundle/linux/appimage/blitz_0.0.0_x86_64.AppImage
           - job_name: Linux (aarch64)
             target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            use_git_cli: true
+            use_git_cli: false
             artifact_name: "Blitz_0.0.0_linux_aarch64.AppImage"
             artifact_path: ./target/dx/blitz/bundle/linux/appimage/blitz_0.0.0_aarch64.AppImage
           - job_name: Android (aarch64)
