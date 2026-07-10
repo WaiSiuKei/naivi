@@ -815,7 +815,7 @@ checksum = "6099cdc01846bc367c4e7dd630dc5966dccf36b652fae7a74e17b640411a91b2"
 
 [[package]]
 name = "blitz"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "anyrender_vello",
  "blitz-dom",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "blitz-dom"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "accesskit",
  "anyrender",
@@ -902,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "blitz-html"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "anyrender",
  "anyrender_vello_cpu",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "blitz-net"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "blitz-traits",
  "data-url",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "blitz-paint"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "anyrender",
  "anyrender_svg",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "blitz-shell"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "accesskit",
  "accesskit_xplat",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "blitz-traits"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "atomic_refcell",
  "bitflags 2.13.0",
@@ -6988,7 +6988,7 @@ dependencies = [
 
 [[package]]
 name = "stylo_taffy"
-version = "0.3.0-alpha.6"
+version = "0.3.0-beta.1"
 dependencies = [
  "stylo",
  "stylo_atoms",
