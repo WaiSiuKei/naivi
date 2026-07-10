@@ -1188,6 +1188,16 @@ impl BaseDocument {
 
     pub fn snapshot_node(&mut self, node_id: usize) {
         let node = &mut self.nodes[node_id];
+
+        // Do not snapshot nodes that have never been styled. A snapshot records an element's
+        // pre-mutation state so a restyle can diff selector matches then-vs-now. An element
+        // that has never been styled has no "then" to diff against. Snapshotting it anyway
+        // makes Stylo's invalidation unwrap its (absent) primary style and panic.
+        let has_been_styled = node.primary_styles().is_some();
+        if !has_been_styled {
+            return;
+        }
+
         let opaque_node_id = TNode::opaque(&&*node);
         node.has_snapshot = true;
         node.snapshot_handled
