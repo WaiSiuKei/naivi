@@ -620,13 +620,13 @@ impl BaseDocument {
         // inline content ends the final line box but must not generate an extra empty
         // line box after it. Parley produces a trailing empty line in this case
         // (text-editor semantics), so we exclude that line from the measured height.
-        if inline_layout.text.ends_with('\n') {
-            if let Some(last_line) = inline_layout.layout.lines().last() {
-                if last_line.items().next().is_none() {
-                    height -= last_line.metrics().line_height;
-                }
-            }
-        }
+        // if inline_layout.text.ends_with('\n') {
+        //     if let Some(last_line) = inline_layout.layout.lines().last() {
+        //         if last_line.items().next().is_none() {
+        //             height -= last_line.metrics().line_height;
+        //         }
+        //     }
+        // }
 
         #[cfg(feature = "floats")]
         {
