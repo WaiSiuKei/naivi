@@ -5,31 +5,55 @@ Blitz is a "native" HTML/CSS renderer built to support the "Dioxus Native" proje
 
 Talk to us in: the #native channel in the [Dioxus Discord](https://discord.gg/BWTrn6d3)
 
-## Development
+## Prerequisites
+
+All platforms require Rust, Python 3 and a C toolchain.
+
+Rust can be installed via https://rustup.rs
+
+### macOS
+
+Python is pre-installed. We recommend using the C toolchaing from the Xcode Command Line tools.
 
 ### Windows
-Building Blitz requires Python, which can be installed from the Windows app store.
+
+Usually requires installing Python. We recommend installing using https://docs.astral.sh/uv/, but any Python 3 should work.
 
 ### Linux
-Requirements:
- * asound2
- * atk1.0
- * gtk-3
- * udev
- * pango1.0
- * xdo
 
-For example on Ubuntu you can install these by running:
+To **build** Blitz you need a C toolchain plus a few dependencies:
+
+ * `pkg-config` and a C compiler (`build-essential`)
+ * `python3` — used to generate code while building `stylo`
+ * `libssl-dev` (OpenSSL) — required by `reqwest` via `blitz-net`
+ * `libfontconfig-dev` (fontconfig) — required by `parley`/`fontique` for system-font enumeration
+
+For example on Ubuntu:
+
 ```sh
 sudo apt-get update
-sudo apt-get install \
-    libasound2-dev \
-    libatk1.0-dev \
-    libgtk-3-dev \
-    libudev-dev \
-    libpango1.0-dev \
-    libxdo-dev
+sudo apt-get install build-essential pkg-config python3 libssl-dev libfontconfig-dev
 ```
+
+To **run** Blitz as windowed application you additionally need X11 and/or Wayland. These are usually already
+present on a desktop Linux install, but may need to be installed in server setups or if using a system like
+Nix that requires explicit dependencies. needed there.
+
+For example on Ubuntu:
+
+```sh
+sudo apt-get update
+sudo apt-get install libfontconfig-dev libx11-dev libxcb1-dev libwayland-dev
+```
+
+The optional **file dialog feature** uses [`rfd`](https://crates.io/crates/rfd)
+with its `xdg-portal` backend. So one of the following must be available for
+a dialog to actually open:
+
+ * a running `xdg-desktop-portal` service **plus** a backend for your desktop
+   environment (e.g. `xdg-desktop-portal-gtk`, `-kde`, `-gnome`, or `-wlr`)
+ * the `zenity` executable, which `rfd` falls back to.
+
 
 ### VSCode
 You can add the following JSON to your `.vscode/settings.json` to automically build Blitz on all supported targets.
