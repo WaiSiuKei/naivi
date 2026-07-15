@@ -31,6 +31,21 @@ pub struct Suggestion {
     display_subtitle: String,
 }
 
+impl Suggestion {
+    /// Stable identity for list diffing. Without this, Dioxus matches rows by
+    /// position; as the suggestion set shifts while typing it would reuse a
+    /// row's `<img>` for a different entry, leaving the previous (already
+    /// decoded) favicon visible on the wrong row. The Literal and Search rows
+    /// are singletons; history rows are deduped by URL, so the URL is unique.
+    fn row_key(&self) -> String {
+        match &self.kind {
+            SuggestionKind::Literal => "literal".to_string(),
+            SuggestionKind::Search => "search".to_string(),
+            SuggestionKind::History(entry) => format!("history:{}", entry.url),
+        }
+    }
+}
+
 enum WorkerMessage {
     SetQuery(String),
     ReplaceEntries(Vec<HistoryEntry>),
@@ -248,6 +263,7 @@ pub fn UrlSuggestions(
         div { class: "urlbar-suggestions",
             for (idx, suggestion) in literal_slice.iter().enumerate() {
                 SuggestionRow {
+                    key: "{suggestion.row_key()}",
                     idx,
                     suggestion: suggestion.clone(),
                     is_selected: selected_idx == Some(idx),
@@ -258,6 +274,7 @@ pub fn UrlSuggestions(
                 div { class: "suggestion-section-header", "History" }
                 for (offset, suggestion) in history.iter().enumerate() {
                     SuggestionRow {
+                        key: "{suggestion.row_key()}",
                         idx: history_start + offset,
                         suggestion: suggestion.clone(),
                         is_selected: selected_idx == Some(history_start + offset),
@@ -269,6 +286,7 @@ pub fn UrlSuggestions(
                 div { class: "suggestion-section-header", "Search Suggestions" }
                 for (offset, suggestion) in search.iter().enumerate() {
                     SuggestionRow {
+                        key: "{suggestion.row_key()}",
                         idx: search_start + offset,
                         suggestion: suggestion.clone(),
                         is_selected: selected_idx == Some(search_start + offset),
