@@ -230,7 +230,7 @@ jobs:
         if: ${{ matrix.platform.os == 'ubuntu-latest' }}
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: libasound2-dev libatk1.0-dev libgtk-3-dev libudev-dev libpango1.0-dev libxdo-dev libssl-dev
+          packages: libfontconfig1-dev
           version: 1.0
 
       - name: Setup
