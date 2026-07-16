@@ -153,6 +153,12 @@ jobs:
           APPLE_API_KEY: ${{ vars.APPLE_API_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ vars.APPLE_API_KEY_PATH }}
 
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        if: ${{ startsWith(matrix.platform.os, 'ubuntu') }}
+        with:
+          packages: libfontconfig1-dev
+          version: 1.0
+
       - name: Post process
         if: ${{ matrix.platform.job_name == 'Android (aarch64)' }} 
         run: |
