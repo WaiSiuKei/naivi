@@ -92,6 +92,16 @@ input[type="button"] {
     justify-content: center;
 }
 
+/* Button-flavored inputs clip their contents to the border box and never
+ * produce a scrolling mechanism. This matches the UA stylesheet mandated by
+ * the HTML standard (https://html.spec.whatwg.org/#form-controls) and prevents
+ * an over-long value label from contributing overflow to the page. */
+input[type="submit"],
+input[type="reset"],
+input[type="button"] {
+    overflow: clip !important;
+}
+
 input[type="file"] {
     border: none;
     padding: 0;
