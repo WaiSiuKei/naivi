@@ -15,11 +15,13 @@ import vue from "@vitejs/plugin-vue";
 import vueJsx from "@vitejs/plugin-vue-jsx";
 import {
   mergeConfig,
+  searchForWorkspaceRoot,
   type InlineConfig,
   type Plugin,
   type PluginOption,
   type UserConfig,
 } from "vite";
+import { findRoot } from "./compile.ts";
 import { findIndexHtmlPage, loadNaiveConfig, type NaivePageConfig } from "./config.ts";
 
 export interface ResolveNaiveViteConfigOptions {
@@ -68,6 +70,50 @@ function injectPageSizeDefine(
   return {
     ...(userConfig.define ?? {}),
     __NAIVE_PAGE_SIZE__: JSON.stringify(size ?? null),
+  };
+}
+
+/**
+ * Naivi packages that must never be dependency-pre-bundled (CLI-managed; a
+ * demo does not declare them): the runtime's wasm import is intentionally
+ * `@vite-ignore`'d and must stay a runtime dynamic import. Prebundling would
+ * statically resolve it and fail with UNRESOLVED_IMPORT.
+ */
+const NAIVI_PREBUNDLE_EXCLUDE = ['@naivi/runtime'];
+
+/**
+ * Merge the CLI-managed dev-server defaults into a page vite config without
+ * clobbering the user's own values:
+ *
+ * - `optimizeDeps.exclude` always lists the naivi runtime (see
+ *   `NAIVI_PREBUNDLE_EXCLUDE`), keeping its `@vite-ignore`'d wasm import
+ *   unresolved during prebundling.
+ * - `server.fs.allow` always lists the project root, Vite's own workspace
+ *   root, and the naivi JS toolchain dir (`<monorepo-root>/js`, where the
+ *   linked `@naivi/runtime` sources live in this monorepo). Setting
+ *   `fs.allow` replaces Vite's default allow list, so the CLI must re-add
+ *   those roots itself — a demo must not have to know about them.
+ */
+function applyNaiviServerDefaults(cwd: string, userConfig: UserConfig): UserConfig {
+  const allow = new Set<string>([searchForWorkspaceRoot(cwd), resolve(cwd)]);
+  const root = findRoot(cwd);
+  if (root) allow.add(resolve(root, 'js'));
+  for (const entry of userConfig.server?.fs?.allow ?? []) {
+    allow.add(resolve(cwd, entry));
+  }
+  return {
+    ...userConfig,
+    optimizeDeps: {
+      ...(userConfig.optimizeDeps ?? {}),
+      exclude: [...NAIVI_PREBUNDLE_EXCLUDE, ...(userConfig.optimizeDeps?.exclude ?? [])],
+    },
+    server: {
+      ...(userConfig.server ?? {}),
+      fs: {
+        ...(userConfig.server?.fs ?? {}),
+        allow: [...allow],
+      },
+    },
   };
 }
 
@@ -135,22 +181,24 @@ export async function loadPageViteConfig(
  * loads the `index.html` page's vite config from `naive.config.ts` (pages
  * required, R6), derives the page size internally (KTD1), and returns a
  * passthrough server config — the page's own plugins, no naive plugin
- * injection, `configFile` disabled, page size injected via `define`.
+ * injection, `configFile` disabled, page size injected via `define`. The
+ * CLI-managed defaults (prebundle exclusion + fs allow list) are applied so
+ * the demo does not need to declare them.
  */
 export async function resolveWebViteConfig(
   cwd: string,
   port: number,
 ): Promise<InlineConfig> {
   const page = await loadPageViteConfig(cwd, "naivi web");
-  const userConfig = page.vite ?? {};
+  const userConfig = applyNaiviServerDefaults(cwd, page.vite ?? {});
   return {
     root: cwd,
     ...userConfig,
     configFile: false,
     // Plan 049 KTD1: inject the page size into the passthrough build.
     define: injectPageSizeDefine(userConfig, pageSizeOf(page)),
-    // Passthrough: keep the page's own server options (e.g. `fs.allow` for
-    // linked toolchain sources); only the port is forced by the CLI.
+    // Passthrough: keep the page's own server options (incl. the
+    // CLI-managed `fs.allow`); only the port is forced by the CLI.
     server: { ...userConfig.server, port },
   };
 }
@@ -166,7 +214,7 @@ export async function resolveWebViteConfig(
 export async function resolveNaiveViteConfig(
   options: ResolveNaiveViteConfigOptions,
 ): Promise<InlineConfig> {
-  const userConfig = options.pageViteConfig ?? {};
+  const userConfig = applyNaiviServerDefaults(options.cwd, options.pageViteConfig ?? {});
 
   const userPlugins = (userConfig.plugins ?? []) as PluginOption[];
   const userNames = new Set(userPlugins.map(pluginName));
@@ -293,7 +341,7 @@ export interface ResolveDesktopViteConfigOptions {
 export function resolveDesktopViteConfig(
   options: ResolveDesktopViteConfigOptions,
 ): InlineConfig {
-  const userConfig = options.pageViteConfig ?? {};
+  const userConfig = applyNaiviServerDefaults(options.cwd, options.pageViteConfig ?? {});
   const userPlugins = (userConfig.plugins ?? []) as PluginOption[];
   const userNames = new Set(userPlugins.map(pluginName));
   const naiveBase = [vue(), vueJsx()].filter((p) => !userNames.has(pluginName(p)));

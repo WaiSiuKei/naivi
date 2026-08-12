@@ -47,6 +47,10 @@ export class DevServer {
       // The user config is already loaded and merged by resolveNaiveViteConfig.
       configFile: false,
       server: {
+        // Preserve the merged `server` options (incl. the CLI-managed
+        // `fs.allow` for the js/ toolchain sources); only port + watch are
+        // forced by the CLI.
+        ...(config.server ?? {}),
         port: this.port,
         watch: { ignored: ['**/pkg/**', '**/node_modules/**'] },
       },

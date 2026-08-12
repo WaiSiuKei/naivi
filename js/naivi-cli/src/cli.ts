@@ -142,7 +142,9 @@ async function main() {
     process.exit(1);
   }
 
-  // `naivi web` does not need the monorepo root
+  // `naivi web` skips the top-level monorepo-root lookup (wasm/desktop need
+  // it to locate the shared host crates); the web config resolver resolves
+  // the root itself, only to extend the fs.allow list with the js/ toolchain.
   if (parsed.command === 'web') {
     // Host-page style validation runs for every command (plan 056 R7): the
     // renderer (wasm canvas / native / web) depends on a full-viewport host
