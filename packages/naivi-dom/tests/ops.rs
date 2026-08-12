@@ -451,6 +451,57 @@ fn handle_ui_event_queues_bound_click_only() {
     assert_eq!(recorded.borrow().len(), 1);
 }
 
+/// A checkbox whose `checked="false"` was set while DETACHED (the naivi facade
+/// flow: Vue builds the element, sets `type`/`checked` attributes, then
+/// inserts it) must be UNCHECKED after layout — the presence-only check used
+/// to mark any `checked` attribute as checked, so the first click merely
+/// "corrected" it and toggling appeared to require two clicks.
+#[test]
+fn detached_checked_false_checkbox_is_unchecked_after_layout() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    // The naivi detached flow: create the input, set `type="checkbox"` and
+    // `checked="false"` BEFORE inserting it (set_input_checked_state is
+    // skipped for non-in-document nodes, so only the attribute survives).
+    let unchecked = ops.create_element("input");
+    ops.set_attr(unchecked, "type", "checkbox");
+    ops.set_attr(unchecked, "checked", "false");
+    ops.append_child(body, unchecked);
+
+    // Same flow with an explicit checked="true"…
+    let checked = ops.create_element("input");
+    ops.set_attr(checked, "type", "checkbox");
+    ops.set_attr(checked, "checked", "true");
+    ops.append_child(body, checked);
+
+    // …and with no checked attribute at all (HTML default).
+    let bare = ops.create_element("input");
+    ops.set_attr(bare, "type", "checkbox");
+    ops.append_child(body, bare);
+
+    // Layout constructs the checkbox special data from the attributes.
+    doc.inner_mut().resolve(0.0);
+
+    let doc_ref = doc.inner();
+    let state = |id| {
+        doc_ref
+            .get_node(id)
+            .unwrap()
+            .element_data()
+            .and_then(|e| e.checkbox_input_checked())
+    };
+    assert_eq!(state(unchecked), Some(false), "checked=\"false\" must stay unchecked");
+    assert_eq!(state(checked), Some(true), "checked=\"true\" must be checked");
+    assert_eq!(state(bare), Some(false), "absent checked attribute must be unchecked");
+}
+
 /// Build a raw keyboard event with default modifiers.
 fn key_event(key: Key, code: Code, state: KeyState) -> BlitzKeyEvent {
     BlitzKeyEvent {

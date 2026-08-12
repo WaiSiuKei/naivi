@@ -815,7 +815,15 @@ fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: NodeId) {
 
     let element = &mut node.data.downcast_element_mut().unwrap();
     if !matches!(element.special_data, SpecialElementData::CheckboxInput(_)) {
-        let checked = element.has_attr(local_name!("checked"));
+        // Parse the `checked` attribute VALUE rather than testing presence:
+        // the naivi facade expresses state as `checked="true"/"false"` (set
+        // while the element is detached, where set_input_checked_state is
+        // skipped), so `checked="false"` must yield unchecked. This matches
+        // set_input_checked_state's value-parsing semantics. HTML authored
+        // `checked` (present, no value, or "true") still means checked.
+        let checked = element
+            .attr(local_name!("checked"))
+            .is_some_and(|v| v != "false");
         element.special_data = SpecialElementData::CheckboxInput(checked);
     }
 }

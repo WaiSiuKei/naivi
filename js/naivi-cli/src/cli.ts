@@ -4,7 +4,7 @@
 
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { findRoot } from './compile.ts';
+import { C, findRoot } from './compile.ts';
 import { parseCommand, type ParsedCommand } from './command.ts';
 import { validateHostStyles } from './host-style.ts';
 import { DevServer } from './dev-server.ts';
@@ -18,11 +18,6 @@ Usage:
   npx naivi wasm --release      Build a production static site with the WASM renderer
   npx naivi desktop             Start the native desktop renderer (QuickJS guest)
   npx naivi desktop --release   Package a macOS .app bundle into release/`;
-
-const C = {
-  ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
-  dim:  (s: string) => `\x1b[2m${s}\x1b[0m`,
-};
 
 // ── commands ────────────────────────────────────────────────────────
 

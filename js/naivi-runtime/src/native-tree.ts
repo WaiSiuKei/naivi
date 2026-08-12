@@ -38,6 +38,57 @@ import { kindToEventType } from './wasm-types.js';
 // Re-export the guest→core contract so consumers can type the bound exports.
 export type { WasmExports, HandlerId, EventType, EventCallback, NaiveDomEvent } from './wasm-types.js';
 
+// ── Debug log forwarding (OFF by default) ───────────────────────────
+//
+// When enabled, every `console.*` level — including tracing_wasm's styled
+// Rust logs on the wasm channel — is also POSTed to the configured endpoint,
+// so a host-side listener can observe the guest's event flow without reading
+// a browser console (useful when the page runs in a remote/embedded browser).
+//
+// Enable before the guest loads (the check runs at module eval):
+//   - `window.__NAIVE_DEBUG_LOG = true` (or a non-empty
+//     `window.__NAIVE_DEBUG_LOG_URL` to also override the endpoint), or
+//   - a `naivi_debug_log` query param on the page URL.
+//
+// Default endpoint: `http://localhost:8091/log?lv=<level>&m=<message>`. Keep
+// this block self-contained — it is pure diagnostics and must never throw.
+const debugLogEndpoint = (() => {
+  const g = globalThis as { __NAIVE_DEBUG_LOG?: unknown; __NAIVE_DEBUG_LOG_URL?: unknown };
+  const enabled =
+    g.__NAIVE_DEBUG_LOG === true ||
+    (typeof g.__NAIVE_DEBUG_LOG_URL === 'string' && g.__NAIVE_DEBUG_LOG_URL.length > 0) ||
+    (typeof location !== 'undefined' && new URLSearchParams(location.search).has('naivi_debug_log'));
+  if (!enabled) return null;
+  if (typeof g.__NAIVE_DEBUG_LOG_URL === 'string' && g.__NAIVE_DEBUG_LOG_URL.length > 0) {
+    return g.__NAIVE_DEBUG_LOG_URL;
+  }
+  return 'http://localhost:8091/log';
+})();
+if (debugLogEndpoint !== null) {
+  const forward = (level: string) => (...args: unknown[]) => {
+    try {
+      fetch(
+        `${debugLogEndpoint}?lv=${encodeURIComponent(level)}&m=${encodeURIComponent(
+          args.map(String).join(' '),
+        )}`,
+      );
+    } catch { /* best-effort */ }
+  };
+  const g = globalThis as unknown as {
+    console: Record<string, (...a: unknown[]) => void>;
+  };
+  const orig: Record<string, (...a: unknown[]) => void> = {};
+  for (const lv of ['log', 'info', 'warn', 'error', 'debug']) {
+    orig[lv] = g.console[lv];
+    g.console[lv] = (...a: unknown[]) => {
+      try { forward(lv)(...a); } catch { /* ignore */ }
+      try { orig[lv]?.apply(g.console, a); } catch { /* ignore */ }
+    };
+  }
+  // eslint-disable-next-line no-console
+  console.info(`[naivi] debug log forwarding enabled → ${debugLogEndpoint}`);
+}
+
 // ── Global state ────────────────────────────────────────────────────
 
 let _wasm: WasmExports | null = null;

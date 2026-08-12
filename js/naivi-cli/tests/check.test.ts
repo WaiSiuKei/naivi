@@ -614,3 +614,139 @@ describe('runCssSubsetCheck — success path', () => {
     }
   });
 });
+
+describe('code-review followups (ce-code-review 073)', () => {
+  it('applies the 3d rule only to transform/translate properties in author CSS (kiln parity)', () => {
+    const report = scanAuthorCss(
+      '.a{content:"3d"}\n.b{font-family:perspective}\n.c{transform:translate3d(0,0,0)}',
+    );
+    // Benign values containing "3d"/"perspective" on other properties must
+    // NOT trip KC1320; only the transform/translate property does.
+    expect(report.findings.map((f) => f.code)).toEqual(['KC1320']);
+    expect(report.findings[0].declaration).toBe('transform: translate3d(0,0,0)');
+  });
+
+  it('never reports 100% supported when there are hits but zero declarations', () => {
+    const report = scanCompiledCss('a:has(b) {}');
+    expect(report.declarations).toBe(0);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0].code).toBe('KC1002');
+    expect(report.supported()).toBe(0);
+    expect(report.percent()).toBe(0);
+  });
+
+  it('KEEPS the hit when a utility class is used via a non-literal :class binding (no silent pass)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n',
+      'src/App.vue': '<template><div :class="cond ? \'fixed\' : \'x\'">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/CSS subset check failed: 1 unsupported/);
+      expect(text).toContain('KC1202');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not treat commented-out classes as usage — the exemption still applies', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n.x{color:red}\n',
+      'src/App.vue': [
+        '<template>',
+        '<!-- <div class="fixed"></div> -->',
+        '<div class="business-card">x</div>',
+        '</template>',
+      ].join('\n'),
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeUndefined();
+      expect(text).toContain('100% supported');
+      expect(text).not.toContain('KC1202');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats index.html class usage as usage — a hit used there is not exempted', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n',
+      'index.html': '<div id="app" class="fixed"></div>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1202');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not attribute/exempt a pseudo-variant selector hit — stays at the compiled CSS line', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.float-left:hover{float:left}\n',
+      'src/App.vue': '<template><div class="float-left">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1101');
+      expect(text).toContain('node_modules/.naive/styles.css');
+      expect(text).not.toContain('App.vue');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a tag-selector hit that is not a known utility class', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': 'div{position:fixed}\n',
+      'src/App.vue': '<template><div class="business-card">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1202');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips with a dim note when styles.css exists but is empty (KTD4)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '',
+      'src/App.vue': '<template><div class="float-left">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeUndefined();
+      expect(text).toContain('empty styles.css');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the utility→rule mapping in lockstep with the CSS-side rule table', () => {
+    const cases: Array<[string, string]> = [
+      ['float-left', '.x{float:left}'],
+      ['sticky', '.x{position:sticky}'],
+      ['fixed', '.x{position:fixed}'],
+      ['table', '.x{display:table}'],
+      ['subgrid', '.x{grid-template-columns:subgrid}'],
+      ['truncate', '.x{text-overflow:ellipsis}'],
+      ['backdrop-blur-sm', '.x{backdrop-filter:blur(4px)}'],
+      ['mix-blend-multiply', '.x{mix-blend-mode:multiply}'],
+      ['contain-layout', '.x{contain:layout}'],
+    ];
+    for (const [cls, css] of cases) {
+      const code = utilityRuleForClass(cls);
+      const codes = new Set(scanCompiledCss(css).findings.map((f) => f.code));
+      expect(codes.has(code as string)).toBe(true);
+    }
+    expect(scanCompiledCss('a:has(b){}').findings[0].code).toBe('KC1002');
+    expect(scanCompiledCss('@container (min-width:400px){.a{color:red}}').findings[0].code)
+      .toBe('KC1401');
+  });
+});

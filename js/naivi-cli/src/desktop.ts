@@ -22,14 +22,9 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'vite';
 import { runCssSubsetCheck } from './check.ts';
-import { compileIfNeeded } from './compile.ts';
+import { C, compileIfNeeded } from './compile.ts';
 import { findIndexHtmlPage, loadNaiveConfig } from './config.ts';
 import { loadPageViteConfig, pageSizeOf, resolveDesktopViteConfig } from './vite-config.ts';
-
-const C = {
-  ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
-  dim:  (s: string) => `\x1b[2m${s}\x1b[0m`,
-};
 
 /** Extract a quoted attribute value from a lowercase tag. */
 function extractAttr(tag: string, name: string): string | null {

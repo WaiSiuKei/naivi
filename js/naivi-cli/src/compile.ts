@@ -26,6 +26,9 @@ export const C = {
   warn: (s: string) => `\x1b[33m⚠\x1b[0m ${s}`,
 };
 
+/** Compiled author CSS output path, relative to a project dir. */
+export const STYLES_OUTPUT_REL = join('node_modules', '.naive', 'styles.css');
+
 // ── find the naive monorepo root ────────────────────────────────────
 
 export function findRoot(from = process.cwd()): string | null {
@@ -49,7 +52,7 @@ export function findRoot(from = process.cwd()): string | null {
 }
 
 /** Find CSS files in the project and resolve @import chains. */
-export function findCSSFiles(targetDir: string): string[] {
+function findCSSFiles(targetDir: string): string[] {
   const results: string[] = [];
 
   // Check common CSS entry points
@@ -116,7 +119,7 @@ export function findVueFiles(dir: string): string[] {
 }
 
 /** Extract the raw CSS text of every `<style>` block in a `.vue` source. */
-export function extractSfcStyles(source: string, filePath: string): string {
+function extractSfcStyles(source: string, filePath: string): string {
   try {
     const { descriptor } = parseSfc(source);
     return descriptor.styles.map((s) => s.content).join('\n');
@@ -232,7 +235,7 @@ export async function compileIfNeeded(targetDir: string): Promise<string> {
   const compiled = await compileTailwindCss(targetDir, rawCss);
   const css = compiled ?? rawCss;
 
-  const outFile = join(naiveDir, 'styles.css');
+  const outFile = join(targetDir, STYLES_OUTPUT_REL);
   writeFileSync(outFile, css);
   console.log(
     css.trim()

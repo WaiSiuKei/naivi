@@ -23,7 +23,7 @@ import { parse as parseCss } from 'postcss';
 import type { AtRule, Declaration, Rule } from 'postcss';
 import { parse as parseSfc } from '@vue/compiler-sfc';
 
-import { C, collectCssChunks, findVueFiles } from './compile.js';
+import { C, STYLES_OUTPUT_REL, collectCssChunks, findVueFiles } from './compile.ts';
 
 export interface Finding {
   code: string;
@@ -52,10 +52,13 @@ function makeReport(declarations: number, findings: Finding[]): CheckReport {
     declarations,
     findings,
     supported() {
-      return this.declarations - this.findings.length;
+      return Math.max(0, this.declarations - this.findings.length);
     },
     percent() {
-      if (this.declarations === 0) return 100;
+      if (this.declarations === 0) {
+        // A report with hits but zero declarations is not "fully supported".
+        return this.findings.length > 0 ? 0 : 100;
+      }
       return Math.round((this.supported() / this.declarations) * 100);
     },
   };
@@ -199,7 +202,15 @@ function scanCss(css: string, opts: ScanOptions, arm: RuleArm): CheckReport {
     const value = decl.value.trim();
     if (!property || !value) return;
     declarations += 1;
-    const hit = arm === '3d' ? propertyRule3d(value) : propertyRule(property, value);
+    // The 3d arm mirrors kiln's KC1320 exactly: only transform/translate
+    // properties whose value contains "3d"/"perspective" (KTD3). Applying
+    // the value substring check to every property would flag benign values
+    // like `content: "3d"` or `font-family: perspective`.
+    const hit = arm === '3d'
+      ? (property === 'transform' || property === 'translate'
+        ? propertyRule3d(value)
+        : undefined)
+      : propertyRule(property, value);
     if (!hit) return;
     let origin: string | undefined;
     if (decl.parent && decl.parent.type === 'rule') {
@@ -418,6 +429,13 @@ function classNameFromSelector(origin: string): string | undefined {
 interface TemplateClasses {
   file: string;
   classes: Map<string, { line: number; column: number }>;
+  /** Comment-stripped raw template text — U4 non-use evidence. */
+  text: string;
+}
+
+/** Remove HTML comments so `<!-- <div class="fixed"> -->` is not usage. */
+function stripHtmlComments(text: string): string {
+  return text.replace(/<!--[\s\S]*?-->/g, '');
 }
 
 /** Parse every `.vue` under `cwd` and collect its static template classes. */
@@ -439,10 +457,9 @@ function collectTemplates(cwd: string): TemplateClasses[] {
       continue;
     }
     if (template === null || !template.trim()) continue;
-    const classes = extractTemplateClasses(template);
-    if (classes.size > 0) {
-      out.push({ file: relative(cwd, vueFile), classes });
-    }
+    const text = stripHtmlComments(template);
+    const classes = extractTemplateClasses(text);
+    out.push({ file: relative(cwd, vueFile), classes, text });
   }
   return out;
 }
@@ -530,14 +547,18 @@ function mergeAuthorFindings(target: Finding[], source: Finding[]): void {
  */
 function isGeneratedUnusedUtility(
   f: Finding,
-  templateClasses: Set<string>,
+  usedTexts: string[],
   authoredKeys: Set<string>,
 ): boolean {
   if (authoredKeys.has(findingKey(f.code, f.declaration))) return false;
   const cls = f.origin ? classNameFromSelector(f.origin) : undefined;
   if (!cls) return false;
   if (utilityRuleForClass(cls) !== f.code) return false;
-  return !templateClasses.has(cls);
+  // Non-use evidence must be absence of the class token in EVERY template
+  // (comment-stripped) and index.html — substring match so non-literal
+  // :class bindings (ternary/object/array, script strings) still count as
+  // usage. Fail-closed: any doubt keeps the hit (KD3).
+  return !usedTexts.some((text) => text.includes(cls));
 }
 
 /**
@@ -554,10 +575,10 @@ function isGeneratedUnusedUtility(
 export function runCssSubsetCheck(cwd: string): void {
   let css: string;
   try {
-    css = readFileSync(join(cwd, 'node_modules', '.naive', 'styles.css'), 'utf8');
+    css = readFileSync(join(cwd, STYLES_OUTPUT_REL), 'utf8');
   } catch {
     // KTD4: missing or unreadable styles.css → dim skip, never a failure.
-    console.log(C.dim('CSS subset check: node_modules/.naive/styles.css not found or unreadable — skipped'));
+    console.log(C.dim(`CSS subset check: ${STYLES_OUTPUT_REL} not found or unreadable — skipped`));
     return;
   }
   if (!css.trim()) {
@@ -565,7 +586,7 @@ export function runCssSubsetCheck(cwd: string): void {
     return;
   }
 
-  const compiled = scanCompiledCss(css, { file: 'node_modules/.naive/styles.css' });
+  const compiled = scanCompiledCss(css, { file: STYLES_OUTPUT_REL });
   let findings: Finding[] = [...compiled.findings];
 
   // KTD3 second input: raw author CSS recollected from the project (3d only).
@@ -581,11 +602,19 @@ export function runCssSubsetCheck(cwd: string): void {
     const templates = collectTemplates(cwd);
     attributeFindings(findings, templates);
 
-    const templateClasses = new Set<string>();
-    for (const t of templates) {
-      for (const cls of t.classes.keys()) templateClasses.add(cls);
+    // U4 non-use evidence: a class counts as "used" when it appears anywhere
+    // in a template's comment-stripped text (static class=, :class literals,
+    // ternary/object/array bindings, script-inlined strings) or in
+    // index.html. Only absence everywhere lets the generated-unused-utility
+    // exemption apply — fail-closed: any doubt keeps the hit (KD3).
+    const usedTexts: string[] = [];
+    for (const t of templates) usedTexts.push(t.text);
+    try {
+      usedTexts.push(stripHtmlComments(readFileSync(join(cwd, 'index.html'), 'utf8')));
+    } catch {
+      /* no index.html — not evidence */
     }
-    if (templateClasses.size > 0) {
+    if (usedTexts.length > 0) {
       const authoredKeys = new Set<string>();
       for (const { css: authorCss, file } of authorChunks) {
         for (const f of scanCompiledCss(authorCss, { file }).findings) {
@@ -593,7 +622,7 @@ export function runCssSubsetCheck(cwd: string): void {
         }
       }
       findings = findings.filter((f) =>
-        !isGeneratedUnusedUtility(f, templateClasses, authoredKeys),
+        !isGeneratedUnusedUtility(f, usedTexts, authoredKeys),
       );
     }
   }
