@@ -80,6 +80,7 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
 async function buildWasmSite(root: string, cwd: string) {
   const { build } = await import('vite');
   const { compileIfNeeded } = await import('./compile.ts');
+  const { runCssSubsetCheck } = await import('./check.ts');
   const { resolveNaiveViteConfig, loadPageViteConfig, pageSizeOf } = await import('./vite-config.ts');
   const page = await loadPageViteConfig(cwd, 'naivi wasm --release');
   const config = await resolveNaiveViteConfig({
@@ -88,11 +89,20 @@ async function buildWasmSite(root: string, cwd: string) {
     pageSize: pageSizeOf(page),
     singleFileGuest: true,
   });
+
+  // U6: compile the author CSS (SFC `<style>` blocks + project CSS), then
+  // gate the build on the CSS subset check (plan 073 U3): compileIfNeeded
+  // produces `node_modules/.naive/styles.css`, which runCssSubsetCheck scans.
+  // Compiling + checking happen BEFORE the Vite build so a hit fails fast
+  // without wasting the build; the throw propagates to main()'s catch-all →
+  // process.exit(1) (KTD5).
+  const stylesCss = await compileIfNeeded(cwd);
+  runCssSubsetCheck(cwd);
+
   await build(config);
 
-  // U6: compile the author CSS (SFC `<style>` blocks + project CSS) and
-  // inline it into guest.js so `loadCSSClassStyles` can inject it into stylo.
-  const stylesCss = await compileIfNeeded(cwd);
+  // Inline the compiled author CSS into guest.js so `loadCSSClassStyles` can
+  // inject it into stylo.
   const cssText = readFileSync(stylesCss, 'utf8');
 
   const outDir = typeof config.build?.outDir === 'string' ? config.build.outDir : 'dist';

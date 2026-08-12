@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'vite';
+import { runCssSubsetCheck } from './check.ts';
 import { compileIfNeeded } from './compile.ts';
 import { findIndexHtmlPage, loadNaiveConfig } from './config.ts';
 import { loadPageViteConfig, pageSizeOf, resolveDesktopViteConfig } from './vite-config.ts';
@@ -182,6 +183,10 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
 
   console.log(C.dim('[naivi] Compiling styles...'));
   const stylesPath = await compileIfNeeded(cwd);
+
+  // Plan 073 U3: gate the desktop build on the CSS subset check — a hit
+  // throws here, before any bundling or window launch (KTD5).
+  runCssSubsetCheck(cwd);
 
   console.log(C.dim('[naivi] Bundling main...'));
   const mainBundlePath = await buildDesktopMainBundle(
