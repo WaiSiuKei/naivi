@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// @naive/cli — naive toolchain CLI.
-// Usage: npx naive web | npx naive wasm [--release] | npx naive desktop [--release]
+// @naivi/cli — naivi toolchain CLI.
+// Usage: npx naivi web | npx naivi wasm [--release] | npx naivi desktop [--release]
 
 import { cpSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,14 +10,14 @@ import { validateHostStyles } from './host-style.ts';
 import { DevServer } from './dev-server.ts';
 import { createServer } from 'vite';
 
-const HELP_TEXT = `naive — Vue Vapor CLI
+const HELP_TEXT = `naivi — Vue Vapor CLI
 
 Usage:
-  npx naive web                 Start dev server with standard Vite (no WASM)
-  npx naive wasm                Start dev server with naive WASM renderer
-  npx naive wasm --release      Build a production static site with the WASM renderer
-  npx naive desktop             Start the native desktop renderer (QuickJS guest)
-  npx naive desktop --release   Package a macOS .app bundle into release/`;
+  npx naivi web                 Start dev server with standard Vite (no WASM)
+  npx naivi wasm                Start dev server with naivi WASM renderer
+  npx naivi wasm --release      Build a production static site with the WASM renderer
+  npx naivi desktop             Start the native desktop renderer (QuickJS guest)
+  npx naivi desktop --release   Package a macOS .app bundle into release/`;
 
 const C = {
   ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
@@ -35,7 +35,7 @@ function copyWasm(root: string, targetDir: string): boolean {
   const dstRuntime = join(targetDir, 'node_modules', '.naive', 'runtime.js');
 
   if (!existsSync(srcPkg)) {
-    console.log(C.dim('[naive] wasm pkg not found — run `make build-host` for WASM support'));
+    console.log(C.dim('[naivi] wasm pkg not found — run `make build-host` for WASM support'));
     return false;
   }
 
@@ -102,13 +102,13 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
 async function buildWasmSite(root: string, cwd: string) {
   await compileIfNeeded(cwd);
   if (!copyWasm(root, cwd)) {
-    console.error('[naive] wasm assets not found — run `make build-host` before `naive wasm --release`.');
+    console.error('[naivi] wasm assets not found — run `make build-host` before `naivi wasm --release`.');
     process.exit(1);
   }
 
   const { build } = await import('vite');
   const { resolveNaiveViteConfig, loadPageViteConfig, pageSizeOf } = await import('./vite-config.ts');
-  const page = await loadPageViteConfig(cwd, 'naive wasm --release');
+  const page = await loadPageViteConfig(cwd, 'naivi wasm --release');
   const config = await resolveNaiveViteConfig({
     cwd,
     pageViteConfig: page.vite,
@@ -138,30 +138,30 @@ async function main() {
     process.exit(1);
   }
 
-  // `naive web` does not need the monorepo root
+  // `naivi web` does not need the monorepo root
   if (parsed.command === 'web') {
     // Host-page style validation runs for every command (plan 056 R7): the
     // renderer (wasm canvas / native / web) depends on a full-viewport host
     // container, and a missing `height:100%` silently collapses the canvas.
-    validateHostStyles(cwd, 'naive web');
+    validateHostStyles(cwd, 'naivi web');
     await cmdWeb('' /* unused */, cwd, parsed.port);
     return;
   }
 
   const root = findRoot();
   if (!root) {
-    console.error('naive: could not find naive monorepo root (Cargo.toml with naive-core).');
+    console.error('naivi: could not find naivi monorepo root (Cargo.toml with naive-core).');
     process.exit(1);
   }
 
-  validateHostStyles(cwd, `naive ${parsed.command}`);
+  validateHostStyles(cwd, `naivi ${parsed.command}`);
 
   if (parsed.command === 'wasm') {
     await cmdWasm(root, cwd, parsed);
   } else if (parsed.command === 'desktop') {
     await cmdDesktop(root, cwd, parsed);
   } else {
-    console.error(`naive: unknown command \`${parsed.command}\`.`);
+    console.error(`naivi: unknown command \`${parsed.command}\`.`);
     console.log(HELP_TEXT);
     process.exit(1);
   }

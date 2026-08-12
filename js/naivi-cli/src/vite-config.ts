@@ -157,7 +157,7 @@ export async function resolveWebViteConfig(
   cwd: string,
   port: number,
 ): Promise<InlineConfig> {
-  const page = await loadPageViteConfig(cwd, "naive web");
+  const page = await loadPageViteConfig(cwd, "naivi web");
   const userConfig = page.vite ?? {};
   return {
     root: cwd,
@@ -165,7 +165,9 @@ export async function resolveWebViteConfig(
     configFile: false,
     // Plan 049 KTD1: inject the page size into the passthrough build.
     define: injectPageSizeDefine(userConfig, pageSizeOf(page)),
-    server: { port },
+    // Passthrough: keep the page's own server options (e.g. `fs.allow` for
+    // linked toolchain sources); only the port is forced by the CLI.
+    server: { ...userConfig.server, port },
   };
 }
 
