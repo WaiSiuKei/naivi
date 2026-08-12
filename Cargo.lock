@@ -4611,40 +4611,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "naivi-counter-native"
-version = "0.0.0"
-dependencies = [
- "anyrender_vello_hybrid",
- "blitz-dom",
- "blitz-shell",
- "blitz-traits",
- "naivi-dom",
- "naivi-guest-quickjs",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "naivi-counter-wasm"
-version = "0.0.0"
-dependencies = [
- "anyrender_vello_hybrid",
- "blitz-dom",
- "blitz-shell",
- "blitz-traits",
- "console_error_panic_hook",
- "js-sys",
- "naivi-dom",
- "parley",
- "tracing",
- "tracing-wasm",
- "wasm-bindgen",
- "web-sys",
- "winit",
-]
-
-[[package]]
 name = "naivi-dom"
 version = "0.3.0-beta.1"
 dependencies = [
@@ -4664,6 +4630,40 @@ dependencies = [
  "naivi-dom",
  "rquickjs",
  "tracing",
+]
+
+[[package]]
+name = "naivi-native"
+version = "0.0.0"
+dependencies = [
+ "anyrender_vello_hybrid",
+ "blitz-dom",
+ "blitz-shell",
+ "blitz-traits",
+ "naivi-dom",
+ "naivi-guest-quickjs",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "naivi-wasm"
+version = "0.0.0"
+dependencies = [
+ "anyrender_vello_hybrid",
+ "blitz-dom",
+ "blitz-shell",
+ "blitz-traits",
+ "console_error_panic_hook",
+ "js-sys",
+ "naivi-dom",
+ "parley",
+ "tracing",
+ "tracing-wasm",
+ "wasm-bindgen",
+ "web-sys",
+ "winit",
 ]
 
 [[package]]

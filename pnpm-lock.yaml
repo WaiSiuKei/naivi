@@ -58,6 +58,31 @@ importers:
         specifier: ^8.2.0
         version: 8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(sass@1.102.0)(tsx@4.23.12)
 
+  examples/naivi/todomvc:
+    dependencies:
+      '@naivi/runtime':
+        specifier: workspace:*
+        version: link:../../../js/naivi-runtime
+      vue:
+        specifier: ^3.6.0-rc.1
+        version: 3.6.0-rc.3(typescript@5.9.3)
+    devDependencies:
+      '@naivi/cli':
+        specifier: workspace:*
+        version: link:../../../js/naivi-cli
+      '@types/node':
+        specifier: ^22.12.0
+        version: 22.20.1
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.8
+        version: 6.0.8(vite@8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(sass@1.102.0)(tsx@4.23.12))(vue@3.6.0-rc.3(typescript@5.9.3))
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^8.2.0
+        version: 8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(sass@1.102.0)(tsx@4.23.12)
+
   js/naivi-cli:
     dependencies:
       '@vitejs/plugin-vue':

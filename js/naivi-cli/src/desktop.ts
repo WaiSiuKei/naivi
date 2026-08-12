@@ -4,7 +4,7 @@
 //    module script) into a single-file IIFE, aliasing `@naivi/runtime/vue-vapor`
 //    to the desktop entry (`js/naivi-runtime/src/desktop-entry.ts`) so the
 //    page's `mount(App)` routes to the QuickJS-aware mount.
-// 2. cargo run the native guest (`naivi-counter-native`) with the bundle
+// 2. cargo run the shared native guest (`naivi-native`) with the bundle
 //    path, which evals it against `globalThis.naive` (the ops FFI) in a
 //    winit window.
 //
@@ -134,12 +134,16 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
   const pageEntry = findPageEntry(cwd);
   const pageBundlePath = await buildDesktopBundle(root, cwd, pageEntry);
 
+  // The native host is a SINGLE shared generic crate (`naivi-native`): it
+  // evals whichever demo's page bundle it is handed (bundle + styles as argv).
+  // No per-demo host crates — `naivi desktop` works for any demo.
+  const nativeCrate = 'naivi-native';
   console.log(
-    C.dim(`[naivi] Running guest: cargo run -p naivi-counter-native -- ${pageBundlePath} ${stylesPath}`),
+    C.dim(`[naivi] Running guest: cargo run -p ${nativeCrate} -- ${pageBundlePath} ${stylesPath}`),
   );
   // Blocking: the guest owns the window event loop until it closes. Pass argv
   // directly (no shell interpolation) so paths with $/backticks/quotes work.
-  execFileSync('cargo', ['run', '-p', 'naivi-counter-native', '--', pageBundlePath, stylesPath], {
+  execFileSync('cargo', ['run', '-p', nativeCrate, '--', pageBundlePath, stylesPath], {
     cwd: root,
     stdio: 'inherit',
   });

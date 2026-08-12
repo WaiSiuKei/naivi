@@ -1,18 +1,18 @@
 [package]
-name = "naivi-counter-native"
-description = "naivi (Vue Vapor) counter on blitz-dom, native channel — winit entry embedding the QuickJS guest (U5)"
+name = "naivi-native"
+description = "naivi (Vue Vapor) generic native host — winit entry embedding the QuickJS guest (U5); runs ANY demo's page bundle"
 version = "0.0.0"
 edition = "2024"
 publish = false
 
 [[bin]]
-name = "naivi-counter-native"
+name = "naivi-native"
 path = "src/main.rs"
 
 [dependencies]
 # naivi bridge core (U3) + native FFI (U5)
-naivi-dom = { path = "../../../packages/naivi-dom", features = ["quickjs"] }
-naivi-guest-quickjs = { path = "../../../packages/naivi-guest-quickjs" }
+naivi-dom = { path = "../naivi-dom", features = ["quickjs"] }
+naivi-guest-quickjs = { path = "../naivi-guest-quickjs" }
 
 # blitz engine + shell + renderer
 anyrender_vello_hybrid = { workspace = true }

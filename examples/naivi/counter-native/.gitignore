@@ -1,4 +1,0 @@
-# The guest bundle is produced by `naivi desktop` (Vite build) into the demo
-# dir's node_modules/.naive — never commit generated bundles.
-node_modules/
-dist/

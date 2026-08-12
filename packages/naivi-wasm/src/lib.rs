@@ -1,4 +1,4 @@
-//! naivi-counter-wasm — U4 wasm channel for the naivi (Vue Vapor) frontend.
+//! naivi-wasm — generic U4 wasm channel for the naivi (Vue Vapor) frontend.
 //!
 //! A `cdylib` exposing the KTD1 mutation-mirror protocol as wasm-bindgen
 //! exports, each a thin adapter over the U3 [`OpsCore`]. A single
@@ -6,6 +6,11 @@
 //! [`BlitzApplication`] (winit + VelloHybrid renderer on the `#blitz-target`
 //! canvas); the guest JS binds these exports, builds/mutates the tree through
 //! them, and receives dispatched DOM events through [`set_event_callback`].
+//!
+//! This is the SHARED wasm host: `naivi wasm --release` (in any
+//! `examples/naivi/<demo>`) drops the demo's guest bundle into this crate's
+//! `assets/guest/`, and `trunk serve` (here) runs it. There are no per-demo
+//! host crates.
 //!
 //! ## Protocol notes (shared with `js/naivi-runtime/src/wasm-types.ts`)
 //!
@@ -280,7 +285,7 @@ pub fn tick() {
 pub fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
-    info!("naivi counter-wasm starting");
+    info!("naivi wasm starting");
 
     let window = web_sys::window().expect("no global window");
     let document = window.document().expect("no document on window");

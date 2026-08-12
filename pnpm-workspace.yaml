@@ -1,10 +1,8 @@
 # pnpm workspace root — the whole naivi toolchain + demos live in ONE workspace
 # anchored at the repo top level (moved up from js/ so demos can use
 # workspace:* deps instead of file: links).
-#
-# Only directories with a package.json become workspace packages; the Rust
-# crates under examples/naivi/ (counter-native, counter-wasm) are skipped.
 packages:
   - 'js/naivi-*'
   - 'examples/naivi/counter'
   - 'examples/naivi/hello'
+  - 'examples/naivi/todomvc'

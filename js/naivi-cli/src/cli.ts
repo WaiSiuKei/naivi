@@ -3,7 +3,7 @@
 // Usage: npx naivi web | npx naivi wasm [--release] | npx naivi desktop [--release]
 
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { findRoot } from './compile.ts';
 import { parseCommand, type ParsedCommand } from './command.ts';
 import { validateHostStyles } from './host-style.ts';
@@ -97,8 +97,11 @@ async function buildWasmSite(root: string, cwd: string) {
 
   const outDir = typeof config.build?.outDir === 'string' ? config.build.outDir : 'dist';
 
-  // Sibling trunk crate: `<demoName>-wasm` (e.g. examples/naivi/counter-wasm).
-  const trunkCrateDir = join(dirname(cwd), `${basename(cwd)}-wasm`);
+  // The wasm host is a SINGLE shared generic trunk crate
+  // (`packages/naivi-wasm`): its host page loads `./assets/guest/guest.js`
+  // and serves whichever demo's guest was built last. No per-demo host crates
+  // — `naivi wasm --release` works for any demo.
+  const trunkCrateDir = join(root, 'packages', 'naivi-wasm');
   const guestDir = join(trunkCrateDir, 'assets', 'guest');
   mkdirSync(guestDir, { recursive: true });
   cpSync(join(outDir, 'guest.bundle.js'), join(guestDir, 'guest.bundle.js'));

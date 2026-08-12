@@ -26,8 +26,8 @@ members = [
     "examples/todomvc",
     "examples/wgpu_texture",
     "examples/wasm_hello",
-    "examples/naivi/counter-wasm",
-    "examples/naivi/counter-native",
+    "packages/naivi-wasm",
+    "packages/naivi-native",
     "packages/naivi-guest-quickjs",
 ]
 exclude = ["sites"]

@@ -1,13 +1,15 @@
-//! naivi counter — native channel (U5).
+//! naivi-native — generic native host (U5).
 //!
-//! A winit entry that runs the Vue Vapor counter through the rquickjs guest
-//! into blitz-dom (stylo + taffy + parley), rendered by the VelloHybrid
-//! renderer in a native window.
+//! A winit entry that runs ANY naivi (Vue Vapor) demo through the rquickjs
+//! guest into blitz-dom (stylo + taffy + parley), rendered by the VelloHybrid
+//! renderer in a native window. The demo is selected by the CLI, which passes
+//! the Vite-built page bundle; there are no per-demo host crates.
 //!
-//! Usage: `naivi-counter-native <page-bundle.js>` — the bundle is the
-//! Vite-built single-file IIFE produced by `naivi desktop` (the CLI aliases
+//! Usage: `naivi-native <page-bundle.js> [styles.css]` — the bundle is the
+//! single-file IIFE produced by `naivi desktop` (the CLI aliases
 //! `@naivi/runtime/vue-vapor` to the desktop entry, which mounts Vue through
-//! the naive renderer against `globalThis.naive`).
+//! the naive renderer against `globalThis.naive`). `styles.css` is the U6
+//! author CSS, injected as `globalThis.__NAIVE_CSS`.
 //!
 //! The guest is evaled BEFORE the window is created: ops issued during the
 //! async mount hit blitz's default no-op shell provider, then the real
@@ -103,7 +105,7 @@ fn main() {
     let bundle_path = match args.get(1) {
         Some(path) => path.clone(),
         None => {
-            eprintln!("usage: naivi-counter-native <page-bundle.js>");
+            eprintln!("usage: naivi-native <page-bundle.js> [styles.css]");
             std::process::exit(1);
         }
     };
@@ -124,7 +126,10 @@ fn main() {
         .unwrap_or_default();
     let author_css = styles_css.trim();
     if !author_css.is_empty() {
-        tracing::info!("naivi native: injecting author stylesheet ({} chars)", author_css.len());
+        tracing::info!(
+            "naivi native: injecting author stylesheet ({} chars)",
+            author_css.len()
+        );
     }
 
     // The document uses system fonts (native): blitz's default font ctx
@@ -149,7 +154,10 @@ fn main() {
     }
     // Inject the author CSS (U6) — the guest reads `globalThis.__NAIVE_CSS`.
     if !author_css.is_empty() {
-        let source = format!("globalThis.__NAIVE_CSS = {};", serde_json::to_string(author_css).expect("css json"));
+        let source = format!(
+            "globalThis.__NAIVE_CSS = {};",
+            serde_json::to_string(author_css).expect("css json")
+        );
         guest
             .eval_script(&source)
             .expect("inject __NAIVE_CSS failed");

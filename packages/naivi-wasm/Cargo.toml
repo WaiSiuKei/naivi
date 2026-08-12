@@ -1,6 +1,6 @@
 [package]
-name = "naivi-counter-wasm"
-description = "naivi (Vue Vapor) counter on blitz-dom, wasm32 channel — KTD1 protocol exports over the U3 OpsCore"
+name = "naivi-wasm"
+description = "naivi (Vue Vapor) generic wasm host — trunk host + KTD1 protocol exports over the U3 OpsCore; serves ANY demo's guest bundle"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # naivi bridge core (U3)
-naivi-dom = { path = "../../../packages/naivi-dom" }
+naivi-dom = { path = "../naivi-dom" }
 
 # blitz engine + shell + renderer
 anyrender_vello_hybrid = { workspace = true, features = ["webgl"] }

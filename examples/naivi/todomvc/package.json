@@ -1,9 +1,9 @@
 {
-  "name": "naivi-counter-demo",
+  "name": "naivi-todomvc-demo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "naivi counter demo — dual-platform: `naivi web` (pure Vite fallback) and U4 wasm (`naivi wasm --release` + trunk in packages/naivi-wasm), plus `naivi desktop` (native).",
+  "description": "naivi todomvc demo — dual-platform: `naivi web` (pure Vite fallback), U4 wasm (`naivi wasm --release` + trunk in examples/naivi/todomvc-wasm), and `naivi desktop` (native winit window).",
   "scripts": {
     "dev": "naivi web",
     "build:wasm": "naivi wasm --release"

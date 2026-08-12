@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>naivi counter — blitz wasm</title>
+    <title>naivi — blitz wasm</title>
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <link data-trunk rel="copy-dir" href="assets" />
     <style>
@@ -28,8 +28,8 @@
     <div id="app">
       <canvas id="blitz-target"></canvas>
     </div>
-    <!-- Guest bundle: emitted by `naivi wasm --release` (run in
-         examples/naivi/counter). Trunk copies assets/ verbatim into dist,
+    <!-- Guest bundle: emitted by `naivi wasm --release` (run in any
+         examples/naivi/<demo>). Trunk copies assets/ verbatim into dist,
          so ./assets/guest/guest.js resolves. -->
     <script type="module" src="./assets/guest/guest.js"></script>
   </body>

@@ -24,9 +24,15 @@ Rust `OpsCore` is engine-neutral; only the host adapters differ.
 | `js/naivi-cli/` | `naivi` CLI: `web` / `wasm --release` / `desktop` (Vite bundling + host launch) |
 | `packages/naivi-dom/` | Rust `Document` impl + engine-neutral `OpsCore` + rquickjs FFI (feature `quickjs`) |
 | `packages/naivi-guest-quickjs/` | QuickJS guest lifecycle (eval bundle, microtask pump, event drain) |
+| `packages/naivi-wasm/` | **Shared** trunk host for the wasm channel (bundles DejaVu Sans; serves any demo's guest) |
+| `packages/naivi-native/` | **Shared** winit entry for the native channel (rquickjs guest; evals any demo's bundle) |
 | `examples/naivi/counter/` | The counter demo (Vue SFC) |
-| `examples/naivi/counter-wasm/` | Trunk host crate for the wasm channel (bundles DejaVu Sans) |
-| `examples/naivi/counter-native/` | Winit entry for the native channel (rquickjs guest) |
+| `examples/naivi/todomvc/` | The todomvc demo (Vue SFC, official TodoMVC structure) |
+
+Both hosts are generic — one wasm host and one native host serve **every**
+demo. There are no per-demo host crates: `naivi wasm --release` drops the
+demo's guest into `packages/naivi-wasm/assets/guest/`, and `naivi desktop`
+runs `naivi-native` with the demo's page bundle.
 
 The whole JS side is one **pnpm workspace anchored at the repo root**
 (`pnpm-workspace.yaml`): the `@naivi/*` toolchain (`js/naivi-*`) plus the
@@ -50,9 +56,9 @@ node ../../../js/naivi-cli/bin/naivi.mjs web
 ### Wasm (blitz in the browser via trunk)
 ```sh
 cd examples/naivi/counter
-node ../../../js/naivi-cli/bin/naivi.mjs wasm --release   # builds assets/guest/
-cd ../counter-wasm
-trunk serve --release --public-url ./ --port 8090
+node ../../../js/naivi-cli/bin/naivi.mjs wasm --release   # → packages/naivi-wasm/assets/guest/
+cd ../../../packages/naivi-wasm
+npx trunk serve --release --public-url ./ --port 8090
 # open http://localhost:8090
 ```
 

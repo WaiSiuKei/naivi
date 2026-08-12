@@ -6,7 +6,7 @@
 //   mount(App);
 //
 // Dual-mode: when WASM is available (naive wasm), renders via the mirror
-// tree + the U4 wasm host (naivi-counter-wasm). When WASM is absent (naive
+// tree + the U4 wasm host (naivi-wasm). When WASM is absent (naive
 // web / standalone Vite), falls back to standard Vue createApp().mount()
 // automatically.
 //
@@ -175,7 +175,7 @@ export async function mount(
     : target;
   if (!targetEl) throw new Error(`naive: mount target "${target}" not found`);
 
-  // The U4 host (naivi-counter-wasm) owns the render loop: the trunk page
+  // The U4 host (naivi-wasm) owns the render loop: the trunk page
   // ships <canvas id="blitz-target"> and the Rust `start()` drives it (winit
   // + VelloHybrid renderer). No JS-side WebHandle is involved.
   let canvas = (targetEl.querySelector("canvas#blitz-target") as HTMLCanvasElement | null)
