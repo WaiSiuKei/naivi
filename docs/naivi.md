@@ -28,6 +28,17 @@ Rust `OpsCore` is engine-neutral; only the host adapters differ.
 | `examples/naivi/counter-wasm/` | Trunk host crate for the wasm channel (bundles DejaVu Sans) |
 | `examples/naivi/counter-native/` | Winit entry for the native channel (rquickjs guest) |
 
+The whole JS side is one **pnpm workspace anchored at the repo root**
+(`pnpm-workspace.yaml`): the `@naivi/*` toolchain (`js/naivi-*`) plus the
+demos (`examples/naivi/counter`, `examples/naivi/hello`), wired with
+`workspace:*` deps. Install once at the top level:
+
+```sh
+pnpm install        # at the repo root
+pnpm -r typecheck   # whole workspace
+pnpm -r test
+```
+
 ## Run the counter demo
 
 ### Web (plain browser, no blitz)

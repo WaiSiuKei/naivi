@@ -11,11 +11,11 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@naivi/runtime": "file:../../../js/naivi-runtime",
+    "@naivi/runtime": "workspace:*",
     "vue": "^3.6.0-rc.1"
   },
   "devDependencies": {
-    "@naivi/cli": "file:../../../js/naivi-cli",
+    "@naivi/cli": "workspace:*",
     "@types/node": "^22.12.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "typescript": "^5.7.0",

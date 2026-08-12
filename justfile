@@ -15,11 +15,9 @@ small:
 
 ## naivi (Vue Vapor AOT frontend on blitz)
 
-# Type-check the JS toolchain (runtime + cli + compiler)
+# Type-check the whole pnpm workspace (toolchain + demos) from the repo root
 naivi-js-check:
-  cd js/naivi-runtime && pnpm typecheck
-  cd js/naivi-cli && pnpm typecheck
-  cd js/naivi-compiler && pnpm typecheck
+  pnpm -r typecheck
 
 # Build the counter wasm guest into examples/naivi/counter-wasm/assets/guest
 # (then: cd examples/naivi/counter-wasm && trunk serve --release --port 8090)

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "naivi — Vue Vapor AOT frontend for blitz (pnpm workspace root). Forks naive's TS compiler/runtime/cli as @naivi/*.",
+  "description": "naivi — Vue Vapor AOT frontend for blitz (pnpm workspace root at the repo top level). Forks naive's TS compiler/runtime/cli as @naivi/* and manages the examples/naivi demos.",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
