@@ -1,0 +1,22 @@
+[package]
+name = "naivi-dom"
+description = "naivi (Vue Vapor AOT) frontend for blitz: Document impl + engine-neutral mutation ops core"
+version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Blitz dependencies
+blitz-dom = { workspace = true, default-features = false, features = ["system-fonts"] }
+blitz-traits = { workspace = true }
+
+# Other dependencies
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+# Used by the integration tests to synthesize raw Blitz pointer events
+keyboard-types = { workspace = true }

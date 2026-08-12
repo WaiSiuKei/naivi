@@ -4611,6 +4611,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "naivi-dom"
+version = "0.3.0-beta.1"
+dependencies = [
+ "blitz-dom",
+ "blitz-traits",
+ "keyboard-types 0.7.0",
+ "rustc-hash 2.1.3",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
