@@ -6,7 +6,16 @@
 //
 // The old naive rule-table pipeline (Tailwind + the Rust `naive-css` binary →
 // `styles.json`) is removed: naivi's AOT CSS output is plain CSS text (KTD4).
+//
+// Tailwind v4: `@import "tailwindcss"` is a build-time directive that stylo
+// cannot resolve, so Tailwind-using demos rendered blank. When the Tailwind
+// v4 toolchain (`@tailwindcss/node` + `@tailwindcss/oxide`) is installed —
+// it is for any demo using the `tailwindcss()` Vite plugin — the collected
+// CSS is compiled through Tailwind's Node compiler (which scans the demo
+// source for utility candidates, same as the Vite plugin) and the compiled
+// plain CSS is what reaches stylo.
 
+import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parse as parseSfc } from '@vue/compiler-sfc';
@@ -117,6 +126,63 @@ function extractSfcStyles(source: string, filePath: string): string {
   }
 }
 
+// ── Tailwind v4 AOT compilation ────────────────────────────────────
+
+interface TailwindCompiler {
+  compile(
+    css: string,
+    options: { base: string; onDependency?: (dep: string) => void },
+  ): Promise<{ build(candidates: string[]): string | { code: string } }>;
+}
+
+interface TailwindScanner {
+  new (options: { sources: Array<{ base: string; pattern: string; negated: boolean }> }): {
+    scan(): Iterable<string>;
+  };
+}
+
+/**
+ * Compile the collected CSS through Tailwind v4's Node compiler.
+ *
+ * Resolves `@tailwindcss/node` from the project's `node_modules` (it is a
+ * transitive dep of the `@tailwindcss/vite` plugin, so when pnpm doesn't hoist
+ * it to the project root, resolve it from the plugin's own install location),
+ * scans the demo source tree for utility candidates via `@tailwindcss/oxide`,
+ * and returns the compiled plain CSS. Returns `null` when the Tailwind v4
+ * toolchain is not installed — callers keep the raw collected CSS.
+ */
+async function compileTailwindCss(targetDir: string, css: string): Promise<string | null> {
+  if (!css.trim()) return null;
+  const requireFromProject = createRequire(join(targetDir, 'package.json'));
+
+  let nodeEntry: string | null = null;
+  try {
+    nodeEntry = requireFromProject.resolve('@tailwindcss/node');
+  } catch {
+    try {
+      nodeEntry = createRequire(requireFromProject.resolve('@tailwindcss/vite')).resolve('@tailwindcss/node');
+    } catch {
+      return null; // no Tailwind v4 toolchain in this project
+    }
+  }
+
+  const requireFromNode = createRequire(nodeEntry);
+  let compile: TailwindCompiler['compile'];
+  let Scanner: TailwindScanner;
+  try {
+    ({ compile } = requireFromNode('@tailwindcss/node') as { compile: TailwindCompiler['compile'] });
+    ({ Scanner } = requireFromNode('@tailwindcss/oxide') as { Scanner: TailwindScanner });
+  } catch {
+    return null;
+  }
+
+  const compiler = await compile(css, { base: targetDir, onDependency: () => {} });
+  const scanner = new Scanner({ sources: [{ base: targetDir, pattern: '**/*', negated: false }] });
+  const candidates = [...new Set(scanner.scan())];
+  const built = compiler.build(candidates);
+  return typeof built === 'string' ? built : built.code;
+}
+
 /** Compile the project's CSS text into `node_modules/.naive/styles.css`. */
 export async function compileIfNeeded(targetDir: string): Promise<string> {
   const naiveDir = join(targetDir, 'node_modules', '.naive');
@@ -142,12 +208,19 @@ export async function compileIfNeeded(targetDir: string): Promise<string> {
     } catch { /* skip */ }
   }
 
-  const css = parts.filter((p) => p.trim()).join('\n\n');
+  const rawCss = parts.filter((p) => p.trim()).join('\n\n');
+
+  // Tailwind v4: `@import "tailwindcss"` and utility classes are compile-time
+  // only; stylo needs the compiled plain CSS. Falls back to raw text when the
+  // Tailwind toolchain is absent (plain-CSS demos like counter/hello).
+  const compiled = await compileTailwindCss(targetDir, rawCss);
+  const css = compiled ?? rawCss;
+
   const outFile = join(naiveDir, 'styles.css');
   writeFileSync(outFile, css);
   console.log(
     css.trim()
-      ? C.ok(`Compiled author CSS (${css.length} chars) → ${outFile}`)
+      ? C.ok(`Compiled author CSS (${css.length} chars${compiled ? ', via Tailwind v4' : ''}) → ${outFile}`)
       : C.dim('No author CSS to compile (empty styles.css)'),
   );
   return outFile;

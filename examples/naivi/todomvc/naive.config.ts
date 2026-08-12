@@ -5,6 +5,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineNaiveConfig, defineViteConfig } from '@naivi/cli';
 import vue from '@vitejs/plugin-vue';
+import tailwindcss from '@tailwindcss/vite';
 
 const demoRoot = fileURLToPath(new URL('.', import.meta.url));
 const jsToolchain = fileURLToPath(new URL('../../../js', import.meta.url));
@@ -16,7 +17,7 @@ export default defineNaiveConfig({
       entry: 'index.html',
       vite: defineViteConfig({
         base: './',
-        plugins: [vue()],
+        plugins: [vue(), tailwindcss()],
         // Keep the runtime's `@vite-ignore`'d wasm import unresolved in web
         // mode (see hello demo for details).
         optimizeDeps: {

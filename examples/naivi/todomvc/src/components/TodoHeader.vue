@@ -1,33 +1,26 @@
-<script setup>
-// Official TodoHeader adds via @keyup.enter reading event.target.value. The
-// blitz engine channels (wasm/native) have no keyboard events, so the input
-// is also v-model bound and an "Add" button emits add-todo — TodosComponent
-// generates a title when the text is empty on engine channels.
-import { ref } from 'vue';
+<script setup lang="ts">
+const emit = defineEmits<{
+  (e: 'add-todo', value: string): void;
+}>();
 
-const emit = defineEmits(['add-todo']);
-const newTodo = ref('');
-
-function onAdd() {
-  const text = newTodo.value.trim();
-  emit('add-todo', text); // empty allowed — TodosComponent decides (engine Add)
-  newTodo.value = '';
+function onEnter(event: KeyboardEvent) {
+  const target = event.target as HTMLInputElement;
+  const text = target.value.trim();
+  if (text.length === 0) return;
+  emit('add-todo', text);
+  target.value = '';
 }
 </script>
 
 <template>
-  <header class="header">
-    <h1>todos</h1>
-    <div class="new-row">
-      <input
-        type="text"
-        class="new-todo"
-        v-model="newTodo"
-        autocomplete="off"
-        placeholder="What needs to be done?"
-        @keyup.enter="onAdd"
-      />
-      <button class="add-btn" @click="onAdd">Add</button>
-    </div>
+  <header>
+    <h1 class="absolute -top-[120px] w-full text-center text-[80px] font-[200] leading-none text-[#b83f45]">todos</h1>
+    <input
+      class="relative h-[65px] w-full border-none bg-[rgba(0,0,0,0.003)] py-4 pl-[60px] pr-4 text-[24px] leading-[1.4em] text-inherit shadow-[inset_0_-2px_1px_rgba(0,0,0,0.03)] placeholder:italic placeholder:font-[400] placeholder:text-[rgba(0,0,0,0.4)]"
+      autofocus
+      autocomplete="off"
+      placeholder="What needs to be done?"
+      @keyup.enter="onEnter"
+    />
   </header>
 </template>

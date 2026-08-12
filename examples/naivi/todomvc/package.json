@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "naivi todomvc demo — dual-platform: `naivi web` (pure Vite fallback), U4 wasm (`naivi wasm --release` + trunk in examples/naivi/todomvc-wasm), and `naivi desktop` (native winit window).",
+  "description": "naivi todomvc demo (Tailwind v4, synced with naive demos/todomvc) — `naivi wasm --release` + shared trunk host (packages/naivi-wasm), `naivi desktop` (shared naivi-native host), `naivi web` (pure Vite fallback).",
   "scripts": {
     "dev": "naivi web",
     "build:wasm": "naivi wasm --release"
@@ -16,6 +16,8 @@
     "vue": "^3.6.0-rc.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3",
     "@naivi/cli": "workspace:*",
     "@types/node": "^22.12.0",
     "@vitejs/plugin-vue": "^6.0.8",
