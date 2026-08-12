@@ -19,6 +19,7 @@ import vue from '@vitejs/plugin-vue';
 
 export default defineNaiveConfig({
   name: 'Naivi Counter',
+  main: 'app/main.ts',
   pages: [
     {
       entry: 'index.html',

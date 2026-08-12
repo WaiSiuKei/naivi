@@ -12,6 +12,7 @@ import vue from '@vitejs/plugin-vue';
 
 export default defineNaiveConfig({
   name: 'Naivi Hello',
+  main: 'app/main.ts',
   pages: [
     {
       entry: 'index.html',

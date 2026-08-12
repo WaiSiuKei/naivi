@@ -25,14 +25,22 @@ Rust `OpsCore` is engine-neutral; only the host adapters differ.
 | `packages/naivi-dom/` | Rust `Document` impl + engine-neutral `OpsCore` + rquickjs FFI (feature `quickjs`) |
 | `packages/naivi-guest-quickjs/` | QuickJS guest lifecycle (eval bundle, microtask pump, event drain) |
 | `packages/naivi-wasm/` | **Shared** trunk host for the wasm channel (bundles DejaVu Sans; serves any demo's guest) |
-| `packages/naivi-native/` | **Shared** winit entry for the native channel (rquickjs guest; evals any demo's bundle) |
+| `packages/naivi-native/` | **Shared** winit entry for the native channel (rquickjs guest; evals any demo's main + page bundles) |
 | `examples/naivi/counter/` | The counter demo (Vue SFC) |
 | `examples/naivi/todomvc/` | The todomvc demo (Vue SFC, official TodoMVC structure) |
 
 Both hosts are generic — one wasm host and one native host serve **every**
 demo. There are no per-demo host crates: `naivi wasm --release` drops the
 demo's guest into `packages/naivi-wasm/assets/guest/`, and `naivi desktop`
-runs `naivi-native` with the demo's page bundle.
+runs `naivi-native` with the demo's main + page bundles.
+
+The desktop `main` entry (from `naive.config.ts` `main`, e.g. `app/main.ts`)
+is the Electron-style main process: `app.whenReady()` + `NaiveWindow` drive
+window creation and page loading. The CLI bundles it into `main-bundle.js`
+(`@naivi/runtime` aliased to the desktop-main API) and the page entry into
+`page-bundle.js` (`@naivi/runtime/vue-vapor` aliased to the desktop mount);
+the host evals the main bundle, resolves `whenReady`, and `loadFile('index.html')`
+evals the page bundle as window content.
 
 The whole JS side is one **pnpm workspace anchored at the repo root**
 (`pnpm-workspace.yaml`): the `@naivi/*` toolchain (`js/naivi-*`) plus the

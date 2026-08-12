@@ -1,24 +1,29 @@
-// Desktop pipeline for `naivi desktop` (plan 072, U5).
+// Desktop pipeline for `naivi desktop` (plan 072, U5; main/page split).
 //
-// 1. Vite: bundle the PAGE entry (discovered from `index.html`'s Vue
-//    module script) into a single-file IIFE, aliasing `@naivi/runtime/vue-vapor`
-//    to the desktop entry (`js/naivi-runtime/src/desktop-entry.ts`) so the
-//    page's `mount(App)` routes to the QuickJS-aware mount.
-// 2. cargo run the shared native guest (`naivi-native`) with the bundle
-//    path, which evals it against `globalThis.naive` (the ops FFI) in a
-//    winit window.
+// 1. compileIfNeeded → `node_modules/.naive/styles.css` (shared pipeline).
+// 2. Vite: bundle the MAIN entry (from `naive.config.ts` `main`) into
+//    `main-bundle.js`, aliasing `@naivi/runtime` to the desktop-main API
+//    (`app.whenReady()` + `NaiveWindow`) and baking the window size in as
+//    `__NAIVE_WINDOW_SIZE__`.
+// 3. Vite: bundle the PAGE entry (discovered from `index.html`'s Vue
+//    module script) into `page-bundle.js`, aliasing `@naivi/runtime/vue-vapor`
+//    to the desktop entry so the page's `mount(App)` routes to the
+//    QuickJS-aware mount. Both bundles reuse the page's `pages[].vite` config
+//    via the shared desktop-mode config builder (plan 065, U1).
+// 4. cargo run the shared native guest (`naivi-native`) with
+//    main-bundle + page-bundle + styles + project dir. The host evals the
+//    main bundle first; `app.whenReady()` + `loadFile('index.html')` drive
+//    window creation and page loading (`loadFile` evals the page bundle).
 //
-// The naive main/page split (`app.whenReady()` + `loadFile`) is NOT part of
-// the U5 counter milestone: the demo has no main entry and the guest evals
-// the page bundle directly. `--release` packaging is deferred to U7.
+// `--release` packaging is deferred to U7.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'vite';
 import { compileIfNeeded } from './compile.ts';
-import { loadNaiveConfig } from './config.ts';
-import { loadPageViteConfig, resolveDesktopViteConfig } from './vite-config.ts';
+import { findIndexHtmlPage, loadNaiveConfig } from './config.ts';
+import { loadPageViteConfig, pageSizeOf, resolveDesktopViteConfig } from './vite-config.ts';
 
 const C = {
   ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
@@ -79,6 +84,15 @@ export function findPageEntry(cwd: string): string {
   return entry;
 }
 
+/** Resolve the config-declared main entry against the project dir (R11). */
+function resolveMainEntry(cwd: string, main: string): string {
+  const entry = join(cwd, main);
+  if (!existsSync(entry)) {
+    throw new Error(`naive desktop: main entry not found at ${entry}`);
+  }
+  return entry;
+}
+
 /** Bundle the page entry into a single-file IIFE for the QuickJS guest.
  * Supports both `.tsx` (jsx transform) and `.vue` SFC (via the page's vue
  * plugins, plan 058 U2/KTD1). Reuses the page's `pages[].vite` config through
@@ -103,13 +117,44 @@ export async function buildDesktopBundle(root: string, cwd: string, entry: strin
   return outfile;
 }
 
+/** Bundle the project's main entry into a single-file IIFE for the guest,
+ * aliasing `@naivi/runtime` to the desktop-main API (`app` + `NaiveWindow`).
+ * The window size is baked in as `__NAIVE_WINDOW_SIZE__` so the runtime
+ * sizes the native window from config without main-code plumbing (plan 057
+ * KTD1). */
+export async function buildDesktopMainBundle(
+  root: string,
+  cwd: string,
+  mainEntry: string,
+  windowSize: { width: number; height: number },
+): Promise<string> {
+  const runtimeSrc = join(root, 'js', 'naivi-runtime', 'src');
+  const desktopMain = join(runtimeSrc, 'desktop-main.ts');
+  const outfile = join(cwd, 'node_modules', '.naive', 'main-bundle.js');
+
+  const page = await loadPageViteConfig(cwd, 'naivi desktop');
+  const config = resolveDesktopViteConfig({
+    cwd,
+    pageViteConfig: page.vite,
+    windowSize,
+    entry: mainEntry,
+    outfile,
+    // Route the main's `import { app, NaiveWindow } from '@naivi/runtime'`
+    // to the desktop-main API module.
+    aliases: { '@naivi/runtime': desktopMain },
+  });
+  await build(config);
+
+  return outfile;
+}
+
 export async function cmdDesktopImpl(root: string, cwd: string, release: boolean): Promise<void> {
-  // U5 scope: the counter demo has no `main` entry and no styles path (that's
-  // U6) — require the index.html page only. `--release` packaging is deferred
-  // to U7.
+  // R11: main is mandatory for desktop (requireMain); pages with an
+  // index.html page are required too, matching wasm/web. `--release`
+  // packaging is deferred to U7.
   const commandLabel = release ? 'naivi desktop --release' : 'naivi desktop';
   const config = await loadNaiveConfig(cwd, {
-    requireMain: false,
+    requireMain: true,
     requirePages: true,
     requireName: false,
     commandLabel,
@@ -121,29 +166,47 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
     );
   }
 
-  // A declared `main` is a no-op for now (the naive main/page split is not
-  // part of the counter milestone); the page bundle is evaled directly.
-  if (config.main) {
-    console.log(C.dim('[naivi] desktop: `main` entry ignored in U5 (page-only flow)'));
+  // The loader guarantees a non-empty `main` when `requireMain` is set (R11);
+  // the guard narrows the optional type for the bundling step below.
+  if (!config.main) {
+    throw new Error(`${commandLabel}: main entry missing`);
   }
+
+  // The window size is the index.html page's fixed size, or 800x600 when the
+  // page declares none (plan 057 R3/R4). `findIndexHtmlPage` also enforces
+  // the index.html requirement with a command-scoped error.
+  const windowSize = pageSizeOf(findIndexHtmlPage(config.pages, commandLabel)) ?? {
+    width: 800,
+    height: 600,
+  };
 
   console.log(C.dim('[naivi] Compiling styles...'));
   const stylesPath = await compileIfNeeded(cwd);
+
+  console.log(C.dim('[naivi] Bundling main...'));
+  const mainBundlePath = await buildDesktopMainBundle(
+    root,
+    cwd,
+    resolveMainEntry(cwd, config.main),
+    windowSize,
+  );
 
   console.log(C.dim('[naivi] Bundling page...'));
   const pageEntry = findPageEntry(cwd);
   const pageBundlePath = await buildDesktopBundle(root, cwd, pageEntry);
 
   // The native host is a SINGLE shared generic crate (`naivi-native`): it
-  // evals whichever demo's page bundle it is handed (bundle + styles as argv).
-  // No per-demo host crates — `naivi desktop` works for any demo.
+  // evals the main bundle (app.whenReady → NaiveWindow.loadFile → page
+  // bundle) for whichever demo's bundles it is handed. No per-demo host
+  // crates — `naivi desktop` works for any demo.
   const nativeCrate = 'naivi-native';
+  const guestArgs = [mainBundlePath, pageBundlePath, stylesPath, cwd];
   console.log(
-    C.dim(`[naivi] Running guest: cargo run -p ${nativeCrate} -- ${pageBundlePath} ${stylesPath}`),
+    C.dim(`[naivi] Running guest: cargo run -p ${nativeCrate} -- ${guestArgs.join(' ')}`),
   );
   // Blocking: the guest owns the window event loop until it closes. Pass argv
   // directly (no shell interpolation) so paths with $/backticks/quotes work.
-  execFileSync('cargo', ['run', '-p', nativeCrate, '--', pageBundlePath, stylesPath], {
+  execFileSync('cargo', ['run', '-p', nativeCrate, '--', ...guestArgs], {
     cwd: root,
     stdio: 'inherit',
   });

@@ -12,5 +12,6 @@
 //! lifecycle (KTD5: pump jobs outside `ctx.with`; KTD7: teardown order).
 
 pub mod guest;
+pub mod main_ffi;
 
 pub use guest::QuickJsGuest;

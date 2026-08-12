@@ -2,21 +2,32 @@
 //!
 //! A winit entry that runs ANY naivi (Vue Vapor) demo through the rquickjs
 //! guest into blitz-dom (stylo + taffy + parley), rendered by the VelloHybrid
-//! renderer in a native window. The demo is selected by the CLI, which passes
-//! the Vite-built page bundle; there are no per-demo host crates.
+//! renderer in a native window. The demo is selected by the CLI; there are no
+//! per-demo host crates.
 //!
-//! Usage: `naivi-native <page-bundle.js> [styles.css]` — the bundle is the
-//! single-file IIFE produced by `naivi desktop` (the CLI aliases
-//! `@naivi/runtime/vue-vapor` to the desktop entry, which mounts Vue through
-//! the naive renderer against `globalThis.naive`). `styles.css` is the U6
-//! author CSS, injected as `globalThis.__NAIVE_CSS`.
+//! Usage (main/page split, primary — `naivi desktop`):
+//! `naivi-native <main-bundle.js> <page-bundle.js> [styles.css] [project-dir]`
 //!
-//! The guest is evaled BEFORE the window is created: ops issued during the
-//! async mount hit blitz's default no-op shell provider, then the real
-//! provider is installed when the window comes up. Every subsequent
-//! [`Document::poll`] pumps guest microtasks and drains queued events.
+//! The main bundle is the Vite-built desktop MAIN entry (the CLI aliases
+//! `@naivi/runtime` to the desktop-main API): it drives startup via
+//! `app.whenReady()` + `NaiveWindow.loadFile('index.html')`. The host builds
+//! `globalThis.__naiveMain` (whenReady/createWindow/loadFile), evals the main
+//! bundle, resolves readiness once the window exists, and `loadFile` evals the
+//! prebuilt page bundle (the Vite-built PAGE entry, aliased so its `mount(App)`
+//! routes through the desktop entry) as window content.
+//!
+//! Backward-compat (page-direct, manual runs):
+//! `naivi-native <page-bundle.js> [styles.css]` evals the page bundle directly
+//! without a main entry (pre-split U5 behavior).
+//!
+//! The guest is evaled BEFORE the window's real shell provider is installed:
+//! ops issued during the async mount hit blitz's default no-op shell provider,
+//! then the real provider is installed when the window comes up. Every
+//! subsequent [`Document::poll`] pumps guest microtasks and drains queued
+//! events.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::task::Context as TaskContext;
 
@@ -26,6 +37,7 @@ use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_defaul
 use blitz_traits::events::UiEvent;
 use naivi_dom::ffi::{self, QueuedEvent};
 use naivi_dom::{EventSink, NaiviDocument, NaiviEvent};
+use naivi_guest_quickjs::main_ffi::{self, MainState};
 use naivi_guest_quickjs::QuickJsGuest;
 
 /// The native event sink: forwards drained naivi events into the QuickJS FFI
@@ -101,33 +113,56 @@ impl Document for DocHandle {
     }
 }
 
+/// Exit non-zero with a message (KD5 parity: fatal host errors surface to the
+/// terminal — no rfd dependency in this crate).
+fn fatal(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::exit(1);
+}
+
 fn main() {
     tracing_subscriber::fmt::init();
 
     let args: Vec<String> = std::env::args().collect();
-    let bundle_path = match args.get(1) {
-        Some(path) => path.clone(),
-        None => {
-            eprintln!("usage: naivi-native <page-bundle.js> [styles.css]");
-            std::process::exit(1);
-        }
+    // Main/page split when a page-bundle arg is present (>= 3 positional
+    // args); otherwise backward-compat page-direct mode (1–2 args).
+    let split_mode = args.len() >= 3;
+    let (main_bundle_path, page_bundle_path, styles_path, project_dir) = if split_mode {
+        (
+            args.get(1).cloned(),
+            args.get(2).cloned(),
+            args.get(3).cloned(),
+            args.get(4).map(PathBuf::from),
+        )
+    } else {
+        (None, args.get(1).cloned(), args.get(2).cloned(), None)
     };
-    let bundle = match std::fs::read_to_string(&bundle_path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("failed to read bundle `{bundle_path}`: {error}");
-            std::process::exit(1);
-        }
+    let Some(page_bundle_path) = page_bundle_path else {
+        fatal(
+            "usage: naivi-native <main-bundle.js> <page-bundle.js> [styles.css] [project-dir]\n       naivi-native <page-bundle.js> [styles.css]",
+        );
     };
 
+    let read_source = |path: &str, what: &str| -> String {
+        match std::fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) => fatal(&format!("failed to read {what} `{path}`: {error}")),
+        }
+    };
+    let page_bundle = read_source(&page_bundle_path, "page bundle");
+    let main_bundle = main_bundle_path
+        .as_deref()
+        .map(|path| read_source(path, "main bundle"));
+
     // U6: the CLI compiles the author CSS to `node_modules/.naive/styles.css`
-    // and passes it as argv[2]. Inject it as `globalThis.__NAIVE_CSS` before
-    // evaling the bundle so `loadCSSClassStyles()` can add_stylesheet it.
-    let styles_css = args
-        .get(2)
+    // and passes it as an optional arg. Inject it as `globalThis.__NAIVE_CSS`
+    // before the page bundle runs so `loadCSSClassStyles()` can add_stylesheet
+    // it.
+    let author_css = styles_path
+        .as_deref()
         .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|css| css.trim().to_string())
         .unwrap_or_default();
-    let author_css = styles_css.trim();
     if !author_css.is_empty() {
         tracing::info!(
             "naivi native: injecting author stylesheet ({} chars)",
@@ -141,44 +176,73 @@ fn main() {
     doc.set_event_sink(Box::new(QuickJsEventSink));
     let doc = Rc::new(RefCell::new(doc));
 
-    // Install the document for the FFI ops BEFORE evaling the bundle.
+    // Install the document for the FFI ops BEFORE evaling any bundle.
     ffi::install_document(Rc::clone(&doc));
 
     let mut guest = match QuickJsGuest::new() {
         Ok(guest) => guest,
-        Err(error) => {
-            eprintln!("failed to create QuickJS guest: {error:?}");
-            std::process::exit(1);
-        }
+        Err(error) => fatal(&format!("failed to create QuickJS guest: {error:?}")),
     };
-    if let Err(error) = guest.init(&bundle) {
-        eprintln!("guest bundle eval failed: {error}");
-        std::process::exit(1);
+
+    // Main/page split: publish the page bundle + project dir (the loadFile
+    // FFI reads them), then eval the main bundle (which registers
+    // `app.whenReady().then(createWindow)` — nothing runs until readiness).
+    if let Some(main_bundle) = &main_bundle {
+        main_ffi::set_main_state(MainState {
+            page_bundle: Some(page_bundle),
+            project_dir,
+            page_loaded: false,
+        });
+        if let Err(error) = guest.init_main(main_bundle) {
+            fatal(&format!("guest main bundle eval failed: {error}"));
+        }
+    } else {
+        // Page-direct mode: eval the page bundle directly (pre-split U5).
+        if let Err(error) = guest.init(&page_bundle) {
+            fatal(&format!("guest page bundle eval failed: {error}"));
+        }
     }
-    // Inject the author CSS (U6) — the guest reads `globalThis.__NAIVE_CSS`.
+
     if !author_css.is_empty() {
         let source = format!(
             "globalThis.__NAIVE_CSS = {};",
-            serde_json::to_string(author_css).expect("css json")
+            serde_json::to_string(&author_css).expect("css json")
         );
         guest
             .eval_script(&source)
             .expect("inject __NAIVE_CSS failed");
     }
-    // Kick off the async mount (the page bundle's `mount(App)` starts on
-    // eval; the first microtask pump advances it before the first frame).
-    guest.pump_jobs();
+
     let guest = Rc::new(RefCell::new(guest));
 
     let event_loop = create_default_event_loop();
     let (proxy, rx) = BlitzShellProxy::new(event_loop.create_proxy());
     let renderer = VelloHybridWindowRenderer::new();
-    let handle = DocHandle::new(doc, guest);
+    let handle = DocHandle::new(doc, Rc::clone(&guest));
     let window = WindowConfig::new(Box::new(handle), renderer);
 
     let mut app = BlitzApplication::<VelloHybridWindowRenderer>::new(proxy, rx);
     app.add_window(window);
+
+    // Main/page split: resolve `app.whenReady()` now — the main's
+    // `createWindow()` (a size confirmation) then `loadFile('index.html')`
+    // run, evaling the page bundle. The window is registered above but its
+    // real shell provider installs when the event loop starts; the async
+    // mount progresses through the no-op provider first, exactly as
+    // page-direct mode did (the provider swaps over on the first frame).
+    if main_bundle.is_some() {
+        if let Err(error) = guest.borrow().resolve_ready() {
+            fatal(&format!("guest resolve_ready failed: {error}"));
+        }
+    }
+
     event_loop.run_app(app).unwrap();
+
+    // KD5 hardening: a main that never loads a page is a silent failure
+    // (blank window, exit 0). Surface it as a non-zero exit.
+    if main_bundle.is_some() && !main_ffi::page_was_loaded() {
+        fatal("naive desktop: main never loaded a page (app.whenReady()/loadFile not called)");
+    }
 
     // The FFI module keeps the document in a thread-local. If it outlives
     // main(), the winit window (held via the shell provider) is dropped during

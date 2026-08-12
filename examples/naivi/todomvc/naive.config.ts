@@ -13,6 +13,7 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineNaiveConfig({
   name: 'Naivi TodoMVC',
+  main: 'app/main.ts',
   pages: [
     {
       entry: 'index.html',

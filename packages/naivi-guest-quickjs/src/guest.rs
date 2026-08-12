@@ -6,6 +6,7 @@
 //! runs inside `ctx.with` so the persisted callback can be restored and
 //! called (mirrors naive-guest-quickjs KTD5 / KTD7).
 
+use crate::main_ffi;
 use naivi_dom::ffi;
 use rquickjs::{Context, Runtime, Value};
 
@@ -56,23 +57,62 @@ impl QuickJsGuest {
     /// A failed eval returns the rquickjs error and leaves the guest
     /// uninitialized (callers decide how to surface it).
     pub fn init(&mut self, bundle: &str) -> rquickjs::Result<()> {
-        self.context.with(|ctx| -> rquickjs::Result<()> {
-            let naive = ffi::build_naive_namespace(ctx.clone())?;
-            ctx.globals().set("naive", naive)?;
-            ffi::register_logging(ctx.clone())?;
-            let _: Value = ctx.eval(CONSOLE_SHIM)?;
-            match ctx.eval::<Value, _>(bundle) {
-                Ok(_) => Ok(()),
-                Err(error) => {
-                    // Surface the real JS exception (rquickjs's bare
-                    // Error::Exception carries no message).
-                    let caught = rquickjs::CaughtError::from_error(&ctx, error);
-                    tracing::error!("guest.init: bundle eval failed: {caught}");
-                    Err(caught.throw(&ctx))
-                }
-            }
+        self.context.with(|ctx| {
+            Self::inject_runtime(&ctx, /* with_main_namespace */ false)?;
+            Self::eval_bundle(&ctx, bundle, "init")
         })?;
         self.initialized = true;
+        Ok(())
+    }
+
+    /// Initialize the guest with the desktop MAIN bundle (main/page split,
+    /// plan 045 U2). Identical to [`init`](Self::init) plus the
+    /// `globalThis.__naiveMain` namespace (whenReady/createWindow/loadFile),
+    /// which the main bundle's `app.whenReady()` reads at eval time. The host
+    /// must have published the page-bundle + project-dir state via
+    /// [`main_ffi::set_main_state`] before this runs, so `loadFile` can eval
+    /// the page bundle when the main calls it.
+    pub fn init_main(&mut self, bundle: &str) -> rquickjs::Result<()> {
+        self.context.with(|ctx| {
+            Self::inject_runtime(&ctx, /* with_main_namespace */ true)?;
+            Self::eval_bundle(&ctx, bundle, "init_main")
+        })?;
+        self.initialized = true;
+        Ok(())
+    }
+
+    /// Inject the shared runtime surface: the ops FFI (`globalThis.naive`),
+    /// the console shim, and (in main mode) the `__naiveMain` namespace.
+    fn inject_runtime(ctx: &rquickjs::Ctx<'_>, with_main_namespace: bool) -> rquickjs::Result<()> {
+        let naive = ffi::build_naive_namespace(ctx.clone())?;
+        ctx.globals().set("naive", naive)?;
+        ffi::register_logging(ctx.clone())?;
+        let _: Value = ctx.eval(CONSOLE_SHIM)?;
+        if with_main_namespace {
+            main_ffi::build_main_namespace(ctx.clone())?;
+        }
+        Ok(())
+    }
+
+    /// Eval a bundle, surfacing the real JS exception (rquickjs's bare
+    /// `Error::Exception` carries no message).
+    fn eval_bundle(ctx: &rquickjs::Ctx<'_>, bundle: &str, what: &str) -> rquickjs::Result<()> {
+        match ctx.eval::<Value, _>(bundle) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let caught = rquickjs::CaughtError::from_error(ctx, error);
+                tracing::error!("guest.{what}: bundle eval failed: {caught}");
+                Err(caught.throw(ctx))
+            }
+        }
+    }
+
+    /// Resolve `app.whenReady()` and pump the resulting microtasks (the main's
+    /// `createWindow()` → `loadFile()` → page-bundle eval chain). Pumping runs
+    /// outside `ctx.with` (KTD5).
+    pub fn resolve_ready(&self) -> rquickjs::Result<()> {
+        self.context.with(|ctx| main_ffi::resolve_ready(ctx))?;
+        self.pump_jobs();
         Ok(())
     }
 
