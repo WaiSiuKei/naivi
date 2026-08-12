@@ -5,16 +5,17 @@
 //   import App from "./app.js";
 //   mount(App);
 //
-// Dual-mode: when WASM is available (naive wasm), renders via the native
-// tree + WebHost pipeline. When WASM is absent (naive web / standalone Vite),
-// falls back to standard Vue createApp().mount() automatically.
+// Dual-mode: when WASM is available (naive wasm), renders via the mirror
+// tree + the U4 wasm host (naivi-counter-wasm). When WASM is absent (naive
+// web / standalone Vite), falls back to standard Vue createApp().mount()
+// automatically.
 //
 // IMPORTANT: Vue is imported dynamically (not at top-level) so the WASM path
 // stays lazy and the naive renderer (createRenderer) is the only consumer —
 // it receives the facade explicitly, so no global `document` patching.
 
-import { bindWasm, type WasmExports } from "./native-tree.js";
-import type { EventDescriptor, EventCallback } from "./wasm-types.js";
+import { bindWasm, registerEventCallback } from "./native-tree.js";
+import { createWasmExports, type WasmBindgenModule } from "./wasm-export.js";
 import { installFontsPendingHook } from "./placeholder-text.js";
 import {
   naiveBodyStyle,
@@ -79,54 +80,48 @@ export interface MountOptions {
 
 let _wasmReady = false;
 
+/**
+ * Resolve the wasm-bindgen module (the U4 host's exports).
+ *
+ * Trunk host page: trunk loads the wasm glue itself, publishes its bindings
+ * on `window.wasmBindings`, and fires `TrunkApplicationStarted` once the
+ * glue's `init()` (which runs `#[wasm_bindgen(start)]`) resolves.
+ */
+async function resolveWasmModule(): Promise<WasmBindgenModule> {
+  const existing = (globalThis as { wasmBindings?: unknown }).wasmBindings;
+  if (existing) return existing as WasmBindgenModule;
+
+  const trunkStarted = new Promise<WasmBindgenModule>((resolve) => {
+    const onStarted = () => {
+      resolve((globalThis as { wasmBindings?: unknown }).wasmBindings as WasmBindgenModule);
+    };
+    window.addEventListener("TrunkApplicationStarted", onStarted, { once: true });
+    // Race guard: the event may have fired before this listener was installed.
+    const bindings = (globalThis as { wasmBindings?: unknown }).wasmBindings;
+    if (bindings) {
+      window.removeEventListener("TrunkApplicationStarted", onStarted);
+      resolve(bindings as WasmBindgenModule);
+    }
+  });
+  return trunkStarted;
+}
+
 async function loadWasm(): Promise<void> {
   if (_wasmReady) return;
-  // Dev serves the naive-owned copy under node_modules/.naive. Production
-  // builds use a naive vite plugin that rewrites this variable import into a
-  // literal, so vite bundles the wasm module into dist/assets (hashed).
-  const wasmPath = import.meta.env.DEV
-    ? "/node_modules/.naive/pkg/naive_host.js"
-    : "/assets/naive-wasm/naive_host.js";
-  const wasmModule = await import(/* @vite-ignore */ wasmPath);
-  await wasmModule.default();
+  const wasmModule = await resolveWasmModule();
+  const wasmExports = createWasmExports(wasmModule);
 
-  const wasmExports: WasmExports = {
-    create_element: (tag: string) => wasmModule.create_element(tag),
-    set_text: (id: bigint, text: string) => wasmModule.set_text(id, text),
-    set_style: (id: bigint, key: string, value: string) =>
-      wasmModule.set_style(id, key, value),
-    append_child: (parent: bigint, child: bigint) =>
-      wasmModule.append_child(parent, child),
-    remove_node: (id: bigint) => wasmModule.remove_node(id),
-    compute_layout: (root: bigint, w: number, h: number) =>
-      wasmModule.compute_layout(root, w, h),
-    apply_ops: (opsJson: string) => wasmModule.apply_ops(opsJson),
-    apply_conditional_styles: (nodeId: bigint, rulesJson: string) =>
-      wasmModule.apply_conditional_styles(nodeId, rulesJson),
-    add_event_listener: (nodeId: bigint, eventType: string, cb: EventCallback) =>
-      wasmModule.add_event_listener(nodeId, eventType, cb),
-    remove_event_listener: (handlerId: bigint) =>
-      wasmModule.remove_event_listener(handlerId),
-    handle_event: (descriptor: EventDescriptor) => wasmModule.handle_event(descriptor),
-    set_placeholder_measures: (opsJson: string) =>
-      wasmModule.set_placeholder_measures(opsJson),
-    clear_placeholder_measures: () => wasmModule.clear_placeholder_measures(),
-    get_layout_rect: (nodeId: bigint) => wasmModule.get_layout_rect(nodeId),
-    set_rule_table: (rulesJson: string) => wasmModule.set_rule_table(rulesJson),
-    flush_styles: () => wasmModule.flush_styles(),
-    get_computed_style_json: (nodeId: bigint) =>
-      wasmModule.get_computed_style_json(nodeId),
-  };
-
-  // Expose for debugging
+  // Expose for debugging.
   (globalThis as any).__naiveWasm = wasmModule;
 
   bindWasm(wasmExports);
 
-  // Plan 040 (review #3/#6): the Rust font loader flips this hook at
-  // start/settle. On the trailing edge placeholders are cleared so they never
-  // stay stuck (failure path safety net; the success path already converges
-  // in Rust).
+  // Route Rust-dispatched events (click/pointer/…) to the JS listener
+  // registry installed by the DOM facade (U4 set_event_callback).
+  registerEventCallback();
+
+  // Font-state hook parity (plan 040 review #3/#6): the U4 host resolves its
+  // bundled font in Rust; the trailing-edge clear is a no-op safety net.
   installFontsPendingHook(() => {
     wasmExports.clear_placeholder_measures();
   });
@@ -168,8 +163,8 @@ export async function mount(
   // through a naive renderer.
   try {
     await loadWasm();
-  } catch {
-    console.error('[naive] WASM mode detected but wasm assets not found. Run `naive wasm` to copy them.');
+  } catch (err) {
+    console.error('[naive] WASM mode detected but wasm assets not found. Run `naive wasm` to copy them.', err);
     return;
   }
 
@@ -180,27 +175,32 @@ export async function mount(
     : target;
   if (!targetEl) throw new Error(`naive: mount target "${target}" not found`);
 
-  let canvas = targetEl.querySelector("canvas") as HTMLCanvasElement | null;
+  // The U4 host (naivi-counter-wasm) owns the render loop: the trunk page
+  // ships <canvas id="blitz-target"> and the Rust `start()` drives it (winit
+  // + VelloHybrid renderer). No JS-side WebHandle is involved.
+  let canvas = (targetEl.querySelector("canvas#blitz-target") as HTMLCanvasElement | null)
+    ?? (document.querySelector("canvas#blitz-target") as HTMLCanvasElement | null)
+    ?? (targetEl.querySelector("canvas") as HTMLCanvasElement | null);
   if (!canvas) {
     canvas = document.createElement("canvas");
-    canvas.id = "naive-canvas";
+    canvas.id = "blitz-target";
     canvas.style.cssText = "display:block;width:100%;height:100%";
     targetEl.appendChild(canvas);
   }
 
-  // Start the WebRunner render loop FIRST — the host context (HostState) is
-  // published by HostApp::build_scene_graph on the first frame, and any
-  // apply_ops batch flushed before that is rejected. Yield a frame so the
-  // first frame completes before we create facade nodes.
-  const wasmPath = import.meta.env.DEV
-    ? "/node_modules/.naive/pkg/naive_host.js"
-    : "/assets/naive-wasm/naive_host.js";
-  const wasmModule2 = await import(/* @vite-ignore */ wasmPath);
-  const { WebHandle } = wasmModule2;
-  const host = new WebHandle();
-  await host.start(canvas);
+  // Yield a frame so the host's first frame completes before we create
+  // facade nodes. Hidden / backgrounded pages never fire rAF, so race the
+  // two-frame wait against a timeout to avoid stalling the mount forever.
   await new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)));
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 500);
   });
 
   // Install the naive DOM facade — its nodes carry real wasmIds before the
@@ -258,10 +258,16 @@ export async function mount(
   const app = renderer.createApp(vueComponent);
   app.mount(naiveRoot);
 
-  // Make the Vue-mounted child fill the naiveRoot container.
+  // Make the Vue-mounted child fill the naiveRoot container. Append to any
+  // existing inline style (a `:style` binding on the root) rather than
+  // replacing it, so the child's own styles are not clobbered.
   const topChild = naiveRoot.childNodes[0] as any;
   if (topChild && topChild.nodeType === 1) {
-    topChild.setAttribute("style", "width:100%;height:100%");
+    const prevStyle = topChild.getAttribute("style");
+    topChild.setAttribute(
+      "style",
+      prevStyle ? `${prevStyle};width:100%;height:100%` : "width:100%;height:100%",
+    );
   }
 
   (globalThis as any).__naiveRoot = naiveRoot;

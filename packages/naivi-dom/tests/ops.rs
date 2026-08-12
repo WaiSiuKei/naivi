@@ -100,6 +100,28 @@ fn create_element_and_append_child() {
 }
 
 #[test]
+fn attach_document_root_wires_facade_body_to_document() {
+    let doc = make_base_document();
+    let mut ops = OpsCore::new(Rc::clone(&doc));
+
+    // A fresh document's root has no element child — blitz resolve treats
+    // that as "No DOM" (the bug the facade body attach fixes).
+    {
+        let d = doc.borrow();
+        let root_id = d.root_node().id;
+        assert!(d.get_node(root_id).unwrap().children.is_empty());
+    }
+
+    let body = ops.create_element("body");
+    ops.attach_document_root(body);
+
+    let d = doc.borrow();
+    let root_id = d.root_node().id;
+    assert_eq!(d.get_node(root_id).unwrap().children.first(), Some(&body));
+    assert_eq!(d.get_node(body).unwrap().parent, Some(root_id));
+}
+
+#[test]
 fn create_text_node_and_set_text() {
     let (mut ops, body) = make_doc_with_skeleton();
 

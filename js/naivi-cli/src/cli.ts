@@ -2,9 +2,9 @@
 // @naivi/cli — naivi toolchain CLI.
 // Usage: npx naivi web | npx naivi wasm [--release] | npx naivi desktop [--release]
 
-import { cpSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { compileIfNeeded, findRoot } from './compile.ts';
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { findRoot } from './compile.ts';
 import { parseCommand, type ParsedCommand } from './command.ts';
 import { validateHostStyles } from './host-style.ts';
 import { DevServer } from './dev-server.ts';
@@ -23,39 +23,6 @@ const C = {
   ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
   dim:  (s: string) => `\x1b[2m${s}\x1b[0m`,
 };
-
-// ── copy WASM assets into the project's naive dir ──────────────────
-
-function copyWasm(root: string, targetDir: string): boolean {
-  const srcPkg = join(root, 'crates', 'naive-host', 'pkg');
-  const srcRuntime = join(root, 'crates', 'naive-host', 'runtime.js');
-  // Naive-owned assets live under node_modules/.naive (same convention as the
-  // compiled styles.json) so the business project tree stays clean.
-  const dstPkg = join(targetDir, 'node_modules', '.naive', 'pkg');
-  const dstRuntime = join(targetDir, 'node_modules', '.naive', 'runtime.js');
-
-  if (!existsSync(srcPkg)) {
-    console.log(C.dim('[naivi] wasm pkg not found — run `make build-host` for WASM support'));
-    return false;
-  }
-
-  mkdirSync(dstPkg, { recursive: true });
-  cpSync(srcPkg, dstPkg, { recursive: true });
-
-  // Fix import path: in the host dir it's '../node_modules/.naive/pkg/',
-  // in the consumer project it's './node_modules/.naive/pkg/'.
-  if (existsSync(srcRuntime)) {
-    let runtime = readFileSync(srcRuntime, 'utf8');
-    runtime = runtime.replace(
-      "from '../node_modules/.naive/pkg/naive_host.js'",
-      "from './node_modules/.naive/pkg/naive_host.js'",
-    );
-    writeFileSync(dstRuntime, runtime);
-  }
-
-  console.log(C.ok(`Copied WASM assets to ${dstPkg}`));
-  return true;
-}
 
 // ── commands ────────────────────────────────────────────────────────
 
@@ -79,33 +46,37 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
     return;
   }
 
-  await compileIfNeeded(cwd);
-  copyWasm(root, cwd);
-
+  // Dev: Vite dev server with the wasm-mode marker (__NAIVE_MODE) injected
+  // into the served index.html. The U4 host module is trunk-built, so the
+  // dev flow serves the guest JS only; run `trunk serve` in the sibling
+  // `-wasm` crate for the full host.
   const server = new DevServer(parsed.port, cwd, parsed.devtools);
 
   server.onFileChange((filePath: string) => {
     server.log(`File changed: ${filePath}`);
-    try {
-      void compileIfNeeded(cwd).then(() => {
-        server.log(`\x1b[32m✓\x1b[0m Recompiled`);
-        server.broadcast('reload');
-      });
-    } catch (e) {
-      console.error(`\x1b[31m✗\x1b[0m ${e instanceof Error ? e.message : String(e)}`);
-    }
+    server.broadcast('reload');
   });
 
   await server.start();
 }
 
+/**
+ * Build the U4 wasm guest bundle (Vite) and copy it into the trunk crate's
+ * `assets/guest/`, ready for `trunk build`.
+ *
+ * Layout (documented, reproducible): running `naivi wasm --release` in a demo
+ * dir `<root>/examples/naivi/<name>` produces
+ * `<root>/examples/naivi/<name>-wasm/assets/guest/` containing
+ * - `guest.js` — a thin wrapper setting `globalThis.__NAIVE_MODE = "wasm"`
+ *   and importing `./guest.bundle.js`;
+ * - `guest.bundle.js` — the Vite-built single-file guest module
+ *   (`inlineDynamicImports`; its runtime wasm import stays a non-literal
+ *   dynamic import).
+ *
+ * The trunk host page (`<name>-wasm/index.html`) references
+ * `./assets/guest/guest.js`; trunk copies `assets/` verbatim into `dist/`.
+ */
 async function buildWasmSite(root: string, cwd: string) {
-  await compileIfNeeded(cwd);
-  if (!copyWasm(root, cwd)) {
-    console.error('[naivi] wasm assets not found — run `make build-host` before `naivi wasm --release`.');
-    process.exit(1);
-  }
-
   const { build } = await import('vite');
   const { resolveNaiveViteConfig, loadPageViteConfig, pageSizeOf } = await import('./vite-config.ts');
   const page = await loadPageViteConfig(cwd, 'naivi wasm --release');
@@ -113,14 +84,31 @@ async function buildWasmSite(root: string, cwd: string) {
     cwd,
     pageViteConfig: page.vite,
     pageSize: pageSizeOf(page),
+    singleFileGuest: true,
   });
   await build(config);
 
-  // The naive-wasm-bundle plugin rewrites the runtime import to a literal,
-  // so vite bundles the wasm module + binary into dist/assets (hashed).
   const outDir = typeof config.build?.outDir === 'string' ? config.build.outDir : 'dist';
-  console.log(C.ok(`Build complete → ${join(cwd, outDir)}`));
+
+  // Sibling trunk crate: `<demoName>-wasm` (e.g. examples/naivi/counter-wasm).
+  const trunkCrateDir = join(dirname(cwd), `${basename(cwd)}-wasm`);
+  const guestDir = join(trunkCrateDir, 'assets', 'guest');
+  mkdirSync(guestDir, { recursive: true });
+  cpSync(join(outDir, 'guest.bundle.js'), join(guestDir, 'guest.bundle.js'));
+  writeFileSync(join(guestDir, 'guest.js'), GUEST_WRAPPER);
+  console.log(C.ok(`Guest bundle → ${guestDir}`));
+  console.log(C.dim(`Next: cd ${trunkCrateDir} && trunk build`));
 }
+
+/** The `guest.js` wrapper emitted by `naivi wasm --release` (do not edit). */
+const GUEST_WRAPPER = `// Generated by \`naivi wasm --release\` (js/naivi-cli) — do not edit.
+// Turns on the runtime's wasm-mode branch, then loads the Vite-built guest
+// bundle. The U4 host's wasm glue is loaded by trunk itself
+// (window.wasmBindings + TrunkApplicationStarted), so the bundle only needs
+// __NAIVE_MODE set before it runs.
+globalThis.__NAIVE_MODE = 'wasm';
+import('./guest.bundle.js');
+`;
 
 async function cmdDesktop(root: string, cwd: string, parsed: ParsedCommand) {
   const { cmdDesktopImpl } = await import('./desktop.ts');
@@ -150,7 +138,7 @@ async function main() {
 
   const root = findRoot();
   if (!root) {
-    console.error('naivi: could not find naivi monorepo root (Cargo.toml with naive-core).');
+    console.error('naivi: could not find the blitz monorepo root (Cargo.toml with a [workspace] containing naivi-dom).');
     process.exit(1);
   }
 

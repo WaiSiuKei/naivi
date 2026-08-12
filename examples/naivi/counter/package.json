@@ -1,0 +1,25 @@
+{
+  "name": "naivi-counter-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "naivi counter demo — dual-platform: `naivi web` (pure Vite fallback) and U4 wasm (`naivi wasm --release` + trunk in examples/naivi/counter-wasm).",
+  "scripts": {
+    "dev": "naivi web",
+    "build:wasm": "naivi wasm --release"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@naivi/runtime": "file:../../../js/naivi-runtime",
+    "vue": "^3.6.0-rc.1"
+  },
+  "devDependencies": {
+    "@naivi/cli": "file:../../../js/naivi-cli",
+    "@types/node": "^22.12.0",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "typescript": "^5.7.0",
+    "vite": "^8.2.0"
+  }
+}

@@ -81,7 +81,23 @@ function naivePatchProp(
   if (key === "class") {
     node.setAttribute("class", next == null ? "" : String(next));
   } else if (key === "style") {
-    node.setAttribute("style", next == null ? "" : String(next));
+    const nodeStyle = (el as unknown as { style: Record<string, unknown> }).style;
+    if (next == null) {
+      node.setAttribute("style", "");
+    } else if (typeof next === "string") {
+      node.setAttribute("style", next);
+    } else if (typeof next === "object") {
+      // Object style (:style binding): forward prop-by-prop through the
+      // style stub so EVERY property reaches the engine (toCssProp →
+      // set_style). Stringifying the whole object would produce
+      // "[object Object]" and drop all properties.
+      const nextObj = next as Record<string, unknown>;
+      const prevObj = prev != null && typeof prev === "object" ? (prev as Record<string, unknown>) : null;
+      if (prevObj) {
+        for (const k in prevObj) if (!(k in nextObj)) nodeStyle[k] = "";
+      }
+      for (const k in nextObj) nodeStyle[k] = nextObj[k];
+    }
   } else if (key.startsWith("on")) {
     const type = key.slice(2).toLowerCase();
     if (typeof prev === "function") {

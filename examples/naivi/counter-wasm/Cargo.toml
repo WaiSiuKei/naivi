@@ -1,0 +1,33 @@
+[package]
+name = "naivi-counter-wasm"
+description = "naivi (Vue Vapor) counter on blitz-dom, wasm32 channel — KTD1 protocol exports over the U3 OpsCore"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# naivi bridge core (U3)
+naivi-dom = { path = "../../../packages/naivi-dom" }
+
+# blitz engine + shell + renderer
+anyrender_vello_hybrid = { workspace = true, features = ["webgl"] }
+blitz-dom = { workspace = true, features = ["woff", "system-fonts"] }
+blitz-shell = { workspace = true, default-features = false, features = ["tracing"] }
+blitz-traits = { workspace = true }
+
+winit = { workspace = true }
+
+# Browsers don't expose system fonts to wasm, so we register a bundled font
+# directly with the parley FontContext.
+parley = { workspace = true, features = ["std"] }
+
+# wasm runtime glue
+console_error_panic_hook = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = "0.3"
+tracing-wasm = { workspace = true }
+tracing = { workspace = true }
+web-sys = { workspace = true, features = ["Document", "HtmlCanvasElement"] }

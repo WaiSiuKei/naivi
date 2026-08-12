@@ -22,8 +22,11 @@ export function findRoot(from = process.cwd()): string | null {
     if (existsSync(cargo)) {
       try {
         const raw = readFileSync(cargo, 'utf8');
-        // Monorepo root: a Cargo workspace that contains the naive-host crate.
-        if (raw.includes('[workspace]') && raw.includes('naive-host')) return dir;
+        // Monorepo root: a Cargo workspace that contains the naive-host crate
+        // (upstream naive repo) or the naivi-dom crate (this blitz repo).
+        if (raw.includes('[workspace]') && (raw.includes('naive-host') || raw.includes('naivi-dom'))) {
+          return dir;
+        }
       } catch { /* file exists but can't be read — skip */ }
     }
     const parent = dirname(dir);

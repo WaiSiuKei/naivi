@@ -1,9 +1,17 @@
-// Guest Mirror Tree — JS-side node management for the Core/Surface/Guest architecture.
+// Guest Mirror Tree — JS-side node management for the naivi bridge (U4).
 //
-// Maintains a complete mirror of the Core render tree with parent/child
-// bidirectional references. Each mutation is immediately synced to Core
-// via the injected WasmExports; the mirror avoids FFI round-trips for
-// parent lookups by keeping the full topology in JS memory.
+// Maintains a complete mirror of the blitz render tree with parent/child
+// bidirectional references. Each mutation is immediately synced to the host
+// via the injected WasmExports; the mirror avoids FFI round-trips for parent
+// lookups by keeping the full topology in JS memory.
+//
+// Protocol (U4, KTD1): node ids are allocated by blitz and returned
+// synchronously (`create_element` / `create_text_node`), so no batching or
+// ref↔id mapping is needed. `setProp` routes attribute-ish props (`class`,
+// `id`) to `set_attr` and everything else to `set_style`. Events bind through
+// `bind_event` / `unbind_event`, and Rust-dispatched events arrive through
+// `set_event_callback` → [`dispatchHostEvent`], which fans them out to the
+// JS-side `(nodeId, kind)` listener registry.
 //
 // Usage:
 //   import { bindWasm, createElement, createTextNode, insertNode } from './native-tree.js';
@@ -22,18 +30,23 @@ import type {
   WasmExports,
   HandlerId,
   EventType,
-  EventDescriptor,
   EventCallback,
+  NaiveDomEvent,
 } from './wasm-types.js';
+import { kindToEventType } from './wasm-types.js';
 
 // Re-export the guest→core contract so consumers can type the bound exports.
-export type { WasmExports, HandlerId, EventType, EventDescriptor } from './wasm-types.js';
+export type { WasmExports, HandlerId, EventType, EventCallback, NaiveDomEvent } from './wasm-types.js';
 
 // ── Global state ────────────────────────────────────────────────────
 
 let _wasm: WasmExports | null = null;
 let _nextId = 1;
 const _registry = new Map<number, NodeMirror>();
+/** blitz node id (as `number`) → eventType → set of guest callbacks. */
+const _listeners = new Map<number, Map<EventType, Set<EventCallback>>>();
+/** handler id (the node id) → binding entry, for removal bookkeeping. */
+const _handlerEntries = new Map<bigint, { node: NodeMirror; kind: EventType; cb: EventCallback }>();
 
 // ── NodeMirror ──────────────────────────────────────────────────────
 
@@ -70,63 +83,63 @@ export function getWasm(): WasmExports {
 
 // ── Tree operations ─────────────────────────────────────────────────
 
-/** Create an element (view) node. */
+/** Create an element node; the id is allocated by blitz and returned synchronously. */
 export function createElement(tag: string): NodeMirror {
   const w = wasm();
-  const wasmId = w.create_element(tag);
   const node: NodeMirror = {
     id: _nextId++,
     type: 1, // Element
     parent: null,
     children: [],
-    wasmId,
+    wasmId: w.create_element(tag),
   };
   _registry.set(node.id, node);
   return node;
 }
 
-/** Store the runtime selector rule table from styles.json (plan 060). */
-export function setRuleTable(rulesJson: string): boolean {
-  return wasm().set_rule_table(rulesJson);
-}
-
 /** Create a text node with initial content. */
 export function createTextNode(text: string): NodeMirror {
   const w = wasm();
-  const wasmId = w.create_element('text');
-  w.set_text(wasmId, text);
   const node: NodeMirror = {
     id: _nextId++,
     type: 3, // Text
     parent: null,
     children: [],
-    wasmId,
+    wasmId: w.create_text_node(text),
     text,
   };
   _registry.set(node.id, node);
   return node;
 }
 
-/** Insert child into parent, optionally before anchor. */
-export function insertNode(
-  parent: NodeMirror,
-  child: NodeMirror,
-  anchor?: NodeMirror | null,
-): void {
-  // Remove from previous parent if any.
-  if (child.parent) {
-    removeFromParent(child);
-  }
-
-  if (anchor && parent.children.includes(anchor)) {
-    const idx = parent.children.indexOf(anchor);
-    parent.children.splice(idx, 0, child);
-  } else {
+/**
+ * Sync `child` into `parent`, preserving JS-side order on the host: when the
+ * child has a next sibling in the mirror, the host inserts before it
+ * (`insert_before`), otherwise it appends. The facade pre-wires the mirror
+ * topology, so this only reconciles and syncs the final order.
+ */
+export function insertNode(parent: NodeMirror, child: NodeMirror): void {
+  if (!parent.children.includes(child)) {
+    if (child.parent && child.parent !== parent) {
+      removeFromParent(child);
+    }
     parent.children.push(child);
+    child.parent = parent;
   }
-  child.parent = parent;
+  const siblings = parent.children;
+  const idx = siblings.indexOf(child);
+  const next = siblings[idx + 1];
+  const w = wasm();
+  if (next !== undefined) {
+    w.insert_before(next.wasmId, child.wasmId);
+  } else {
+    w.append_child(parent.wasmId, child.wasmId);
+  }
+}
 
-  wasm().append_child(parent.wasmId, child.wasmId);
+/** Attach a node as a child of the document root (the facade `body`). */
+export function attachDocumentRoot(node: NodeMirror): void {
+  wasm().attach_document_root(node.wasmId);
 }
 
 /** Remove a node from both mirror and Core (recursively removes children). */
@@ -135,13 +148,34 @@ export function removeNode(node: NodeMirror): void {
     removeNode(child);
   }
   removeFromParent(node);
-  wasm().remove_node(node.wasmId);
+  const w = wasm();
+  w.remove_node(node.wasmId);
+  // Drop JS-side listener entries + host bindings for the removed subtree root.
+  unbindAll(node.wasmId);
   _registry.delete(node.id);
 }
 
-/** Set a style property. */
+/** Attribute-ish props route to `set_attr`; everything else is a style prop. */
+const ATTR_PROPS = new Set(['class', 'id']);
+
+/** Set a property, routing attribute-ish props (`class`, `id`) to `set_attr` and style props to `set_style`. */
 export function setProp(node: NodeMirror, key: string, value: string): void {
-  wasm().set_style(node.wasmId, key, value);
+  const w = wasm();
+  if (ATTR_PROPS.has(key)) {
+    w.set_attr(node.wasmId, key, value);
+  } else {
+    w.set_style(node.wasmId, key, value);
+  }
+}
+
+/** Set an element attribute (e.g. `class`, `id`, `data-*`). */
+export function setAttr(node: NodeMirror, name: string, value: string): void {
+  wasm().set_attr(node.wasmId, name, value);
+}
+
+/** Sync a `:checked` state through the `checked` attribute (stylo matching). */
+export function setChecked(node: NodeMirror, checked: boolean): void {
+  wasm().set_attr(node.wasmId, 'checked', checked ? 'true' : 'false');
 }
 
 /** Set text content on a text node. */
@@ -150,36 +184,109 @@ export function setText(node: NodeMirror, text: string): void {
   wasm().set_text(node.wasmId, text);
 }
 
-// ── Event binding ───────────────────────────────────────────────────
+// ── Event binding (U4: bind_event / unbind_event + set_event_callback) ──
 
-/** Register an event listener on a node. Returns HandlerId for later removal. */
+/**
+ * Register an event listener on a node. Returns the blitz node id as the
+ * handler id (the U4 protocol's `bind_event` return), for later removal.
+ */
 export function addEventListener(
   node: NodeMirror,
   eventType: EventType,
   callback: EventCallback,
 ): HandlerId {
-  return wasm().add_event_listener(node.wasmId, eventType, callback);
+  const w = wasm();
+  const handlerId = w.bind_event(node.wasmId, eventType);
+  const nodeId = Number(node.wasmId);
+  let byKind = _listeners.get(nodeId);
+  if (!byKind) {
+    byKind = new Map();
+    _listeners.set(nodeId, byKind);
+  }
+  let set = byKind.get(eventType);
+  if (!set) {
+    set = new Set();
+    byKind.set(eventType, set);
+  }
+  set.add(callback);
+  _handlerEntries.set(handlerId, { node, kind: eventType, cb: callback });
+  return handlerId;
 }
 
-/** Remove a previously registered event listener. */
+/** Remove a previously registered event listener (by its handler id). */
 export function removeEventListener(handlerId: HandlerId): void {
-  wasm().remove_event_listener(handlerId);
+  wasm().unbind_event(handlerId);
+  const entry = _handlerEntries.get(handlerId);
+  if (entry) {
+    const byKind = _listeners.get(Number(entry.node.wasmId));
+    byKind?.get(entry.kind)?.delete(entry.cb);
+    _handlerEntries.delete(handlerId);
+  }
 }
 
-/** Route a browser/DOM event into the Core event system. */
-export function handleEvent(descriptor: EventDescriptor): void {
-  wasm().handle_event(descriptor);
+/**
+ * Register the Rust→JS event callback. The host calls it as
+ * `(nodeId, kind, x, y)`; we route it to the JS listener registry.
+ */
+export function registerEventCallback(): void {
+  wasm().set_event_callback((nodeId, kind, x, y) => {
+    dispatchHostEvent(nodeId, kind, x, y);
+  });
+}
+
+/** Route a host-dispatched `(nodeId, kind, x, y)` event to registered listeners. */
+export function dispatchHostEvent(nodeId: number, kind: number, x: number, y: number): void {
+  const type = kindToEventType(kind);
+  const byKind = _listeners.get(nodeId);
+  if (!byKind) return;
+  const handlers = byKind.get(type);
+  if (!handlers || handlers.size === 0) return;
+  const event = makeDomEvent(type, x, y);
+  for (const cb of [...handlers]) {
+    try {
+      cb(event);
+    } catch (error) {
+      console.error('[naivi] guest event listener threw:', error);
+    }
+  }
+}
+
+function makeDomEvent(type: EventType, x: number, y: number): NaiveDomEvent {
+  return {
+    type,
+    target: null,
+    currentTarget: null,
+    clientX: x,
+    clientY: y,
+    preventDefault() {},
+    stopPropagation() {},
+  };
+}
+
+/** Drop every JS-side listener entry + host binding for a node id. */
+function unbindAll(nodeId: bigint): void {
+  _listeners.delete(Number(nodeId));
+  for (const [handlerId, entry] of _handlerEntries) {
+    if (entry.node.wasmId === nodeId) {
+      _handlerEntries.delete(handlerId);
+    }
+  }
+  try {
+    wasm().unbind_event(nodeId);
+  } catch {
+    /* node already gone — nothing to unbind */
+  }
 }
 
 // ── Layout & render ─────────────────────────────────────────────────
 
-/** Trigger layout computation on the Core side. Returns JSON layout result. */
-export function computeLayout(
-  root: NodeMirror,
-  width: number,
-  height: number,
-): string {
-  return wasm().compute_layout(root.wasmId, width, height);
+/**
+ * Computed layout rect of a mirror node. The U4 protocol has no layout-query
+ * export (get_layout_rect was removed), so this always returns `null`; the
+ * facade's `getBoundingClientRect()` falls back to zeros.
+ */
+export function getBoundingClientRect(_node: NodeMirror): MirrorRect | null {
+  return null;
 }
 
 // ── Query ───────────────────────────────────────────────────────────
@@ -207,22 +314,6 @@ export interface MirrorRect {
   height: number;
 }
 
-/**
- * Read a mirror node's computed layout rect from the Rust host.
- *
- * Returns `null` when the node has no wasm id yet or has not been laid out
- * (host returns JSON `null`), instead of throwing.
- */
-export function getBoundingClientRect(node: NodeMirror): MirrorRect | null {
-  if (node.wasmId === 0n) return null;
-  const json = wasm().get_layout_rect(node.wasmId);
-  try {
-    return JSON.parse(json) as MirrorRect | null;
-  } catch {
-    return null;
-  }
-}
-
 /** Allocate a unique mirror id (used by bulk loaders). */
 export function allocateMirrorId(): number {
   return _nextId++;
@@ -233,25 +324,14 @@ export function registerMirror(node: NodeMirror): void {
   _registry.set(node.id, node);
 }
 
-/**
- * Remove a mirror from the registry only (no WASM / tree mutation).
- *
- * Used by the batched FFI bridge, which owns its own removal queue and must
- * not issue a second `remove_node` call; keeping the registry in sync
- * prevents stale mirrors from being collected for placeholder measurement
- * (plan 040) or bounding-box queries after removal.
- */
+/** Remove a mirror from the registry only (no WASM / tree mutation). */
 export function unregisterMirror(node: NodeMirror): void {
   _registry.delete(node.id);
 }
 
-// ── Placeholder measurement support (plan 040) ──────────────────────
-
 /**
- * Collect every text node in the mirror tree for placeholder measurement
- * (plan 040, review #3). Returns the nodes with their resolved wasm ids so
- * the pending-font period can write DOM-measured placeholders aligned with
- * the FFI's id-addressed ops.
+ * Collect every text node in the mirror tree (placeholder measurement /
+ * diagnostics). Returns the nodes with their resolved wasm ids.
  */
 export function collectTextNodes(): Array<{
   wasmId: bigint;

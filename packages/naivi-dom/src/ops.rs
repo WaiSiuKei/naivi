@@ -103,6 +103,18 @@ impl OpsCore {
         mutr.replace_node_with(anchor, &[replacement]);
     }
 
+    /// Attach `node_id` as a child of the document root node.
+    ///
+    /// blitz's resolve and hit-test treat the document as "having DOM" only
+    /// once the root node has an element child; the guest facade must attach
+    /// its top-level container (the body) for anything to render.
+    pub fn attach_document_root(&mut self, node_id: NodeId) {
+        let mut doc = self.doc.borrow_mut();
+        let root = doc.root_node().id;
+        let mut mutr = doc.mutate();
+        mutr.append_children(root, &[node_id]);
+    }
+
     /// Remove and drop a node (and its subtree) from the document.
     ///
     /// The node's id is invalidated: reusing it is a guest bug and will panic.

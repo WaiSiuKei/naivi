@@ -33,6 +33,12 @@ export interface ResolveNaiveViteConfigOptions {
   devtools?: boolean;
   /** Called on project file changes (dev watcher wiring). */
   onStylesChange?: (filePath: string) => void;
+  /**
+   * U4 wasm build: emit the guest bundle as a single self-contained module
+   * named `guest.bundle.js` (`inlineDynamicImports`) so the CLI can copy it
+   * into the trunk crate's `assets/guest/` verbatim.
+   */
+  singleFileGuest?: boolean;
 }
 
 /**
@@ -116,18 +122,20 @@ function naiveDevtoolsPlugin(cwd: string): Plugin {
  * binary) into dist/assets with hashed names. Standalone Vite builds
  * (naive web) keep the variable + @vite-ignore form and never resolve the
  * absent file.
+ *
+ * U4: the wasm glue is no longer bundled by Vite — the trunk-built host
+ * (`naivi-counter-wasm`) is loaded by trunk itself and published on
+ * `window.wasmBindings` (+ `TrunkApplicationStarted`). The runtime's
+ * `@vite-ignore`'d dynamic import stays unresolved at runtime.
  */
 function naiveWasmBundlePlugin(): Plugin {
   return {
     name: "naive-wasm-bundle",
     apply: "build",
-    transform(code, id) {
-      if (!id.includes("index-vue-vapor.ts")) return null;
-      const out = code.replace(
-        /await import\(\s*\/\* @vite-ignore \*\/\s*wasmPath\s*\)/g,
-        'await import("/node_modules/.naive/pkg/naive_host.js")',
-      );
-      return out;
+    transform() {
+      // No rewrite in U4: the guest loads `window.wasmBindings`, so the
+      // variable import must remain a runtime dynamic import.
+      return null;
     },
   };
 }
@@ -202,6 +210,27 @@ export async function resolveNaiveViteConfig(
   // Plan 049 KTD1: inject the page size (object-literal-or-null expression),
   // deep-merging the user's own define entries.
   merged.define = injectPageSizeDefine(userConfig, options.pageSize ?? null);
+
+  // U4 wasm build: single-file guest bundle named `guest.bundle.js`, with the
+  // runtime's dynamic wasm import left inline (a non-literal specifier is not
+  // resolved by rollup). The CLI copies this one file into the trunk crate.
+  if (options.singleFileGuest) {
+    const userOutput = merged.build?.rollupOptions?.output;
+    merged.build = {
+      ...merged.build,
+      rollupOptions: {
+        ...merged.build?.rollupOptions,
+        output: [
+          ...(Array.isArray(userOutput) ? userOutput : userOutput ? [userOutput] : []),
+          {
+            entryFileNames: 'guest.bundle.js',
+            codeSplitting: false,
+          },
+        ],
+      },
+    };
+  }
+
   return merged;
 }
 
