@@ -521,6 +521,83 @@ describe('runCssSubsetCheck — author-CSS 3d merge (KTD3)', () => {
   });
 });
 
+describe('runCssSubsetCheck — Tailwind 产物豁免 (U4 calibration)', () => {
+  it('exempts a generated utility class that no template uses and is not authored (KC1202 .fixed)', () => {
+    // Mirrors the todomvc case: Tailwind's oxide scanner picked `fixed` out
+    // of a naive.config.ts comment and compiled `.fixed { position: fixed }`,
+    // but no template uses the class and no author CSS declares it — the
+    // rule is generated cruft, never applied by the app.
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n.x{color:red}\n',
+      'src/App.vue': '<template><div class="business-card">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeUndefined();
+      expect(text).toContain('100% supported');
+      expect(text).not.toContain('KC1202');
+      expect(text).not.toContain('×');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('KEEPS the hit when the utility class IS used in a template (author-chosen)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n',
+      'src/App.vue': '<template><div class="fixed">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/CSS subset check failed: 1 unsupported/);
+      expect(text).toContain('KC1202');
+      // parseSfc strips the <template> wrapper, so `fixed` sits at template-
+      // content column 13 (<div class="fixed">x</div>).
+      expect(text).toContain('src/App.vue:1:13');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('KEEPS the hit with no .vue files — no template evidence of non-use', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1202');
+      // No template evidence → the compiled-CSS hit is kept, at the
+      // declaration's property start (col 8 in `.fixed{position:fixed}`).
+      expect(text).toContain('node_modules/.naive/styles.css:1:8');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('KEEPS the hit when the declaration is hand-written in author CSS (KTD3 second input)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n',
+      'src/App.vue': [
+        '<template><div class="business-card">x</div></template>',
+        '<style>.fixed{position:fixed}</style>',
+      ].join('\n'),
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1202');
+      // The authored declaration keeps the strict hit (calibration never
+      // drops hand-written CSS); like all non-3d findings it stays at the
+      // compiled-CSS location (the KTD3 author merge only re-points 3d).
+      expect(text).toContain('node_modules/.naive/styles.css:1:8');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('runCssSubsetCheck — success path', () => {
   it('prints a dim confirmation and does not throw when everything is supported', () => {
     const dir = makeFixture({

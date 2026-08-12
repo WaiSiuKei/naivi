@@ -315,7 +315,20 @@ export { C };
 // out of scope (KTD2 — the compiled CSS is the decision source, templates
 // only attribute).
 
-/** Small utility-class → rule-code map (plan U2 list + natural extensions). */
+/** Small utility-class → rule-code map (plan U2 list + natural extensions).
+ *
+ * U4 calibration (Tailwind 产物豁免, 2026-08-12): these are the ONLY class
+ * names whose compiled-CSS hits can be dropped by `isGeneratedUnusedUtility`
+ * in runCssSubsetCheck. Rationale: Tailwind v4's oxide candidate scanner
+ * extracts utility names from ANY scanned text — including comments/strings
+ * in config and source files — so a stray word (verified: todomvc's
+ * naive.config.ts comment "no fixed width/height" → `.fixed { position:
+ * fixed }`) compiles into a rule no element ever uses. That generated,
+ * un-authored, template-unused utility is not author-chosen CSS (KTD3
+ * spirit) and flagging it would over-claim the engine gap. Non-utility
+ * selectors (`.hero`, `#nav`, `div`…) and author-written declarations are
+ * never eligible — they keep failing strictly (KD3).
+ */
 export function utilityRuleForClass(className: string): string | undefined {
   if (className === 'float-left' || className === 'float-right') return 'KC1101';
   if (className === 'sticky') return 'KC1201';
@@ -520,13 +533,54 @@ function collectAuthorCss(cwd: string): Array<{ css: string; file: string }> {
 }
 
 /**
+ * U4 calibration — "Tailwind 产物豁免" (plan U4; KTD3 spirit, see the
+ * utilityRuleForClass note).
+ *
+ * Tailwind v4's oxide candidate scanner extracts utility names from ANY
+ * scanned text — including comments/strings in config and source files — so
+ * a stray word compiles into a real utility rule that no element ever uses
+ * (verified: todomvc's naive.config.ts comment "no fixed width/height"
+ * generates a `.fixed { position: fixed }` rule no template references).
+ * Flagging that rule over-claims: it is generated output outside author CSS
+ * and is never applied by the app.
+ *
+ * A finding is dropped ONLY when ALL of these hold; anything else keeps the
+ * strict hit (KD3 — no allowlist):
+ *   1. the declaration was NOT hand-written in author CSS (the KTD3 second
+ *      input recollection: SFC `<style>` blocks + standalone CSS);
+ *   2. its origin is a bare class selector whose class maps to the finding's
+ *      code via `utilityRuleForClass` (a known Tailwind utility name);
+ *   3. that class appears in NO template — positive evidence of non-use.
+ *      Without template evidence (no .vue files / no template classes) we
+ *      cannot assert non-use, so the hit is kept.
+ *
+ * This narrows WHICH declarations count as hits (generated, unused utilities
+ * are not author-chosen), it does not exempt Tailwind output wholesale:
+ * genuine usage — the class used in a template, an author-written
+ * declaration, or any non-utility selector — always fails the build.
+ */
+function isGeneratedUnusedUtility(
+  f: Finding,
+  templateClasses: Set<string>,
+  authoredKeys: Set<string>,
+): boolean {
+  if (authoredKeys.has(findingKey(f))) return false;
+  const cls = f.origin ? classNameFromSelector(f.origin) : undefined;
+  if (!cls) return false;
+  if (utilityRuleForClass(cls) !== f.code) return false;
+  return !templateClasses.has(cls);
+}
+
+/**
  * Composite CSS subset check (plan U2) — the entry U3 wires into the wasm /
  * desktop build flow. Reads the compiled `node_modules/.naive/styles.css`,
  * scans it (ALL rules), appends author-CSS 3d findings (KTD3), attributes
- * class-selector hits back to `.vue` templates (KTD2), prints the kiln-shaped
- * report and throws when anything is unsupported (KTD5). Missing / empty
- * styles.css → dim skip, never throws (KTD4). Returns void; the caller (U3)
- * lets the throw propagate to main()'s catch-all → process.exit(1).
+ * class-selector hits back to `.vue` templates (KTD2), drops generated
+ * unused Tailwind utilities (U4 calibration — isGeneratedUnusedUtility),
+ * prints the kiln-shaped report and throws when anything is unsupported
+ * (KTD5). Missing / empty styles.css → dim skip, never throws (KTD4).
+ * Returns void; the caller (U3) lets the throw propagate to main()'s
+ * catch-all → process.exit(1).
  */
 export function runCssSubsetCheck(cwd: string): void {
   const stylesPath = join(cwd, 'node_modules', '.naive', 'styles.css');
@@ -547,15 +601,39 @@ export function runCssSubsetCheck(cwd: string): void {
   }
 
   const compiled = scanCompiledCss(css, { file: relative(cwd, stylesPath) });
-  const findings: Finding[] = [...compiled.findings];
+  let findings: Finding[] = [...compiled.findings];
+
+  const authorChunks = collectAuthorCss(cwd);
 
   // KTD3 second input: raw author CSS recollected from the project (3d only).
-  for (const { css: authorCss, file } of collectAuthorCss(cwd)) {
+  for (const { css: authorCss, file } of authorChunks) {
     mergeAuthorFindings(findings, scanAuthorCss(authorCss, { file }).findings);
   }
 
   // Template attribution (KTD2/AE2).
-  attributeFindings(findings, collectTemplates(cwd));
+  const templates = collectTemplates(cwd);
+  attributeFindings(findings, templates);
+
+  // U4 calibration — "Tailwind 产物豁免": drop generated, unused Tailwind
+  // utilities (see isGeneratedUnusedUtility). Only when templates give us
+  // positive evidence of what the app actually uses; the authored-set is the
+  // all-rules scan of the KTD3 author-CSS recollection (membership test
+  // only — never added to the report).
+  const templateClasses = new Set<string>();
+  for (const t of templates) {
+    for (const cls of t.classes.keys()) templateClasses.add(cls);
+  }
+  if (templateClasses.size > 0) {
+    const authoredKeys = new Set<string>();
+    for (const { css: authorCss, file } of authorChunks) {
+      for (const f of scanCompiledCss(authorCss, { file }).findings) {
+        authoredKeys.add(findingKey(f));
+      }
+    }
+    findings = findings.filter((f) =>
+      !isGeneratedUnusedUtility(f, templateClasses, authoredKeys),
+    );
+  }
 
   const report = makeReport(compiled.declarations, findings);
   if (report.findings.length > 0) {
