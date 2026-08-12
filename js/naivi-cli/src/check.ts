@@ -8,7 +8,7 @@
 //  - scanCompiledCss: the merged, compiled final author CSS — ALL rules apply.
 //  - scanAuthorCss: the raw author-written CSS (SFC `<style>` blocks +
 //    standalone CSS, recollected by the caller via compile.ts's
-//    findCSSFiles/extractSfcStyles) — only the 3d rule (KC1320) applies, so
+//    collectCssChunks) — only the 3d rule (KC1320) applies, so
 //    Tailwind-generated 3d utilities in the compiled output are never blamed
 //    on the author (and float/… in the author CSS is the compiled scan's job).
 //
@@ -16,19 +16,14 @@
 // (KTD4); percent() is computed over the deduped count. Malformed CSS is
 // logged as a warning and yields an empty report — never a throw (KTD4).
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { parse as parseCss } from 'postcss';
 import type { AtRule, Declaration, Rule } from 'postcss';
 import { parse as parseSfc } from '@vue/compiler-sfc';
 
-import { extractSfcStyles, findCSSFiles, findVueFiles } from './compile.js';
-
-const C = {
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
-  warn: (s: string) => `\x1b[33m⚠\x1b[0m ${s}`,
-};
+import { C, collectCssChunks, findVueFiles } from './compile.js';
 
 export interface Finding {
   code: string;
@@ -181,7 +176,7 @@ function scanCss(css: string, opts: ScanOptions, arm: RuleArm): CheckReport {
     column: number,
     origin?: string,
   ): void => {
-    const key = `${code}\u0000${declaration}`;
+    const key = findingKey(code, declaration);
     const existing = dedup.get(key);
     if (existing) {
       existing.count += 1;
@@ -256,7 +251,7 @@ export function scanCompiledCss(css: string, opts?: ScanOptions): CheckReport {
 /**
  * Scan raw author-written CSS with ONLY the 3d rule (KC1320) — the KTD3
  * carrier input. The caller recollects author CSS via compile.ts's
- * findCSSFiles + extractSfcStyles.
+ * collectCssChunks.
  */
 export function scanAuthorCss(css: string, opts?: ScanOptions): CheckReport {
   return scanCss(css, opts ?? {}, '3d');
@@ -289,9 +284,6 @@ export function renderReport(report: CheckReport): string {
   return lines.join('\n');
 }
 
-// Re-export the ANSI helpers so callers can dim the rendered report the same
-// way compile.ts's `C` does (U2/U3 may render `C.dim(renderReport(r))`).
-export { C };
 
 // ── U2: template utility-class attribution + composite entry ────────
 //
@@ -299,8 +291,8 @@ export { C };
 // desktop build flow. Flow (plan U2):
 //   1. read node_modules/.naive/styles.css — missing/empty → dim skip (KTD4)
 //   2. scanCompiledCss (ALL rules) on the compiled CSS
-//   3. recollect raw author CSS (compile.ts findCSSFiles + extractSfcStyles,
-//      KTD3 second input) → scanAuthorCss (3d only) → append findings
+//   3. recollect raw author CSS (compile.ts collectCssChunks, KTD3 second
+//      input) → scanAuthorCss (3d only) → append findings
 //      (declarations stay from the compiled scan, KTD4)
 //   4. template attribution pass: a finding whose origin is a class selector
 //      gets re-pointed to the .vue file/line/col when that class appears in a
@@ -482,8 +474,8 @@ function attributeFindings(findings: Finding[], templates: TemplateClasses[]): v
   }
 }
 
-function findingKey(f: Finding): string {
-  return `${f.code}\u0000${f.declaration}`;
+function findingKey(code: string, declaration: string): string {
+  return `${code}\u0000${declaration}`;
 }
 
 /**
@@ -493,9 +485,9 @@ function findingKey(f: Finding): string {
  * compiled scan, so the same physical declaration never double-counts.
  */
 function mergeAuthorFindings(target: Finding[], source: Finding[]): void {
-  const byKey = new Map(target.map((f) => [findingKey(f), f]));
+  const byKey = new Map(target.map((f) => [findingKey(f.code, f.declaration), f]));
   for (const f of source) {
-    const k = findingKey(f);
+    const k = findingKey(f.code, f.declaration);
     const existing = byKey.get(k);
     if (existing) {
       existing.file = f.file;
@@ -507,29 +499,6 @@ function mergeAuthorFindings(target: Finding[], source: Finding[]): void {
       target.push(f);
     }
   }
-}
-
-/** Recollect raw author CSS exactly like compileIfNeeded does (KTD3 input). */
-function collectAuthorCss(cwd: string): Array<{ css: string; file: string }> {
-  const chunks: Array<{ css: string; file: string }> = [];
-  for (const cssFile of findCSSFiles(cwd)) {
-    try {
-      const css = readFileSync(cssFile, 'utf8');
-      if (css.trim()) chunks.push({ css, file: relative(cwd, cssFile) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  const srcDir = join(cwd, 'src');
-  for (const vueFile of findVueFiles(srcDir)) {
-    try {
-      const styles = extractSfcStyles(readFileSync(vueFile, 'utf8'), vueFile);
-      if (styles.trim()) chunks.push({ css: styles, file: relative(cwd, vueFile) });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  return chunks;
 }
 
 /**
@@ -564,7 +533,7 @@ function isGeneratedUnusedUtility(
   templateClasses: Set<string>,
   authoredKeys: Set<string>,
 ): boolean {
-  if (authoredKeys.has(findingKey(f))) return false;
+  if (authoredKeys.has(findingKey(f.code, f.declaration))) return false;
   const cls = f.origin ? classNameFromSelector(f.origin) : undefined;
   if (!cls) return false;
   if (utilityRuleForClass(cls) !== f.code) return false;
@@ -583,16 +552,12 @@ function isGeneratedUnusedUtility(
  * catch-all → process.exit(1).
  */
 export function runCssSubsetCheck(cwd: string): void {
-  const stylesPath = join(cwd, 'node_modules', '.naive', 'styles.css');
-  if (!existsSync(stylesPath)) {
-    console.log(C.dim('CSS subset check: node_modules/.naive/styles.css not found — skipped'));
-    return;
-  }
   let css: string;
   try {
-    css = readFileSync(stylesPath, 'utf8');
+    css = readFileSync(join(cwd, 'node_modules', '.naive', 'styles.css'), 'utf8');
   } catch {
-    console.log(C.dim('CSS subset check: cannot read node_modules/.naive/styles.css — skipped'));
+    // KTD4: missing or unreadable styles.css → dim skip, never a failure.
+    console.log(C.dim('CSS subset check: node_modules/.naive/styles.css not found or unreadable — skipped'));
     return;
   }
   if (!css.trim()) {
@@ -600,39 +565,37 @@ export function runCssSubsetCheck(cwd: string): void {
     return;
   }
 
-  const compiled = scanCompiledCss(css, { file: relative(cwd, stylesPath) });
+  const compiled = scanCompiledCss(css, { file: 'node_modules/.naive/styles.css' });
   let findings: Finding[] = [...compiled.findings];
 
-  const authorChunks = collectAuthorCss(cwd);
-
   // KTD3 second input: raw author CSS recollected from the project (3d only).
+  const authorChunks = collectCssChunks(cwd);
   for (const { css: authorCss, file } of authorChunks) {
     mergeAuthorFindings(findings, scanAuthorCss(authorCss, { file }).findings);
   }
 
-  // Template attribution (KTD2/AE2).
-  const templates = collectTemplates(cwd);
-  attributeFindings(findings, templates);
+  // Template attribution (KTD2/AE2) and the U4 Tailwind-unused-utility filter
+  // only matter when there is at least one hit — on a green build this skips
+  // the project-wide SFC parse and the authored-set scan entirely.
+  if (findings.length > 0) {
+    const templates = collectTemplates(cwd);
+    attributeFindings(findings, templates);
 
-  // U4 calibration — "Tailwind 产物豁免": drop generated, unused Tailwind
-  // utilities (see isGeneratedUnusedUtility). Only when templates give us
-  // positive evidence of what the app actually uses; the authored-set is the
-  // all-rules scan of the KTD3 author-CSS recollection (membership test
-  // only — never added to the report).
-  const templateClasses = new Set<string>();
-  for (const t of templates) {
-    for (const cls of t.classes.keys()) templateClasses.add(cls);
-  }
-  if (templateClasses.size > 0) {
-    const authoredKeys = new Set<string>();
-    for (const { css: authorCss, file } of authorChunks) {
-      for (const f of scanCompiledCss(authorCss, { file }).findings) {
-        authoredKeys.add(findingKey(f));
-      }
+    const templateClasses = new Set<string>();
+    for (const t of templates) {
+      for (const cls of t.classes.keys()) templateClasses.add(cls);
     }
-    findings = findings.filter((f) =>
-      !isGeneratedUnusedUtility(f, templateClasses, authoredKeys),
-    );
+    if (templateClasses.size > 0) {
+      const authoredKeys = new Set<string>();
+      for (const { css: authorCss, file } of authorChunks) {
+        for (const f of scanCompiledCss(authorCss, { file }).findings) {
+          authoredKeys.add(findingKey(f.code, f.declaration));
+        }
+      }
+      findings = findings.filter((f) =>
+        !isGeneratedUnusedUtility(f, templateClasses, authoredKeys),
+      );
+    }
   }
 
   const report = makeReport(compiled.declarations, findings);

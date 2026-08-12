@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, relative, resolve } from 'node:path';
 import { parse as parseSfc } from '@vue/compiler-sfc';
 
-const C = {
+export const C = {
   ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
   dim:  (s: string) => `\x1b[2m${s}\x1b[0m`,
   warn: (s: string) => `\x1b[33m⚠\x1b[0m ${s}`,
@@ -183,17 +183,20 @@ async function compileTailwindCss(targetDir: string, css: string): Promise<strin
   return typeof built === 'string' ? built : built.code;
 }
 
-/** Compile the project's CSS text into `node_modules/.naive/styles.css`. */
-export async function compileIfNeeded(targetDir: string): Promise<string> {
-  const naiveDir = join(targetDir, 'node_modules', '.naive');
-  mkdirSync(naiveDir, { recursive: true });
+/** Collect the project's raw CSS text as (css, relative-file) chunks —
+ * standalone CSS entry points plus SFC `<style>` blocks. Shared by
+ * `compileIfNeeded` (compiled output) and the CSS subset check (KTD3 second
+ * input) so the recollection stays in lockstep. */
+export interface CssChunk { css: string; file: string; }
 
-  const parts: string[] = [];
+export function collectCssChunks(targetDir: string): CssChunk[] {
+  const chunks: CssChunk[] = [];
 
   // Standalone CSS entry points (main.css, src/main.css, …).
   for (const cssFile of findCSSFiles(targetDir)) {
     try {
-      parts.push(readFileSync(cssFile, 'utf8'));
+      const css = readFileSync(cssFile, 'utf8');
+      if (css.trim()) chunks.push({ css, file: relative(targetDir, cssFile) });
     } catch { /* skip */ }
   }
 
@@ -201,11 +204,24 @@ export async function compileIfNeeded(targetDir: string): Promise<string> {
   const srcDir = join(targetDir, 'src');
   for (const vueFile of findVueFiles(srcDir)) {
     try {
-      const styles = extractSfcStyles(readFileSync(vueFile, 'utf8'), vueFile);
-      if (styles.trim()) {
-        parts.push(`/* ${relative(targetDir, vueFile)} */\n${styles}`);
-      }
+      const css = extractSfcStyles(readFileSync(vueFile, 'utf8'), vueFile);
+      if (css.trim()) chunks.push({ css, file: relative(targetDir, vueFile) });
     } catch { /* skip */ }
+  }
+
+  return chunks;
+}
+
+/** Compile the project's CSS text into `node_modules/.naive/styles.css`. */
+export async function compileIfNeeded(targetDir: string): Promise<string> {
+  const naiveDir = join(targetDir, 'node_modules', '.naive');
+  mkdirSync(naiveDir, { recursive: true });
+
+  const parts: string[] = [];
+  for (const chunk of collectCssChunks(targetDir)) {
+    // SFC chunks get a `/* file */` header in the compiled output; standalone
+    // CSS goes in verbatim.
+    parts.push(chunk.file.endsWith('.vue') ? `/* ${chunk.file} */\n${chunk.css}` : chunk.css);
   }
 
   const rawCss = parts.filter((p) => p.trim()).join('\n\n');
