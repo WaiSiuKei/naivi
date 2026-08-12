@@ -13,6 +13,27 @@ fmt:
 small:
   cargo build --profile small -p counter --no-default-features --features cpu,system-fonts
 
+## naivi (Vue Vapor AOT frontend on blitz)
+
+# Type-check the JS toolchain (runtime + cli + compiler)
+naivi-js-check:
+  cd js/naivi-runtime && pnpm typecheck
+  cd js/naivi-cli && pnpm typecheck
+  cd js/naivi-compiler && pnpm typecheck
+
+# Build the counter wasm guest into examples/naivi/counter-wasm/assets/guest
+# (then: cd examples/naivi/counter-wasm && trunk serve --release --port 8090)
+naivi-counter-wasm:
+  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/naivi.mjs wasm --release
+
+# Run the counter in a native winit window (rquickjs guest)
+naivi-counter-desktop:
+  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/naivi.mjs desktop
+
+# Serve the counter in a plain browser (standard Vite, no WASM)
+naivi-counter-web:
+  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/naivi.mjs web
+
 ## WPT test runner
 
 wpt *ARGS:

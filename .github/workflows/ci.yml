@@ -96,6 +96,28 @@ jobs:
       - name: Build todomvc (wasm)
         run: cargo build -p todomvc --lib --target wasm32-unknown-unknown --no-default-features --features hybrid
 
+  # naivi: type-check + build the JS toolchain (runtime / cli / compiler) and
+  # check the naivi Rust crates compile (wasm target for the counter host).
+  naivi-js:
+    name: "naivi JS toolchain"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: js/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: js
+      - run: pnpm -r typecheck
+        working-directory: js
+      - run: pnpm -r build
+        working-directory: js
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
