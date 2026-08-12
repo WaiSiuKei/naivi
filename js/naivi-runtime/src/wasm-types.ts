@@ -34,7 +34,10 @@ export type EventType =
   | 'dblclick'
   | 'keydown'
   | 'keyup'
-  | 'input';
+  | 'input'
+  // Synthesized (never a wire `u8` kind): the dispatcher emits `change` for
+  // checkbox/radio toggles reported by the engine as `input` events.
+  | 'change';
 export type HandlerId = bigint;
 
 /**

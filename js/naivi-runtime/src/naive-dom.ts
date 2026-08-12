@@ -105,6 +105,7 @@ export interface NaiveElement extends DOMNodeBase {
   className: string;
   id: string;
   value: string;
+  checked: boolean;
   innerHTML: string;
   _events: Record<string, EventListener[]>;
   _attrs: Record<string, string>;
@@ -276,6 +277,12 @@ function createNaiveElement(tag: string): NaiveElement {
     // text-input editor updates (e.g. Vue's `v-model` / clearing after submit).
     get value() { return this._attrs["value"] ?? ""; },
     set value(v: string) { this.setAttribute("value", String(v)); },
+
+    // Checked property (checkboxes/radios): getter reflects the last
+    // engine-synced state; setter routes through setAttribute → set_attr so
+    // the engine's checkbox state updates (Vue `v-model` / `:checked`).
+    get checked() { return this._attrs["checked"] === "true" || this._attrs["checked"] === ""; },
+    set checked(v: boolean) { this.setAttribute("checked", v ? "true" : "false"); },
 
     style: null as unknown as CSSStyleDeclaration,
     classList: createClassListStub(),
@@ -687,13 +694,19 @@ export function initNaiveDocument(): void {
   _globalDoc = createNaiveDocument();
 
   // Wire the event dispatcher's element resolver: set `event.target` on
-  // dispatched events and sync the engine's input value into the facade
-  // element's `_attrs.value` on `input` events (so `el.value` and
-  // `event.target.value` reflect the typed text).
+  // dispatched events and sync the engine's input payload into the facade
+  // element on `input` events — `_attrs.value` for text inputs (so `el.value`
+  // and `event.target.value` reflect the typed text), `_attrs.checked` for
+  // checkboxes/radios (so `el.checked` / `event.target.checked` reflect the
+  // toggled state; the dispatcher then emits the synthetic `change` event).
   setEventElementResolver((nodeId: number, value?: string) => {
     const el = _elByWasmId.get(nodeId) ?? null;
     if (el && value !== undefined) {
-      el._attrs.value = value;
+      if (el._attrs.type === "checkbox" || el._attrs.type === "radio") {
+        el._attrs.checked = value === "true" ? "true" : "false";
+      } else {
+        el._attrs.value = value;
+      }
     }
     return el;
   });

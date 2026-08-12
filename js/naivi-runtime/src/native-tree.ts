@@ -56,6 +56,9 @@ const _handlerEntries = new Map<bigint, { node: NodeMirror; kind: EventType; cb:
 type ElementResolver = (nodeId: number, value?: string) => unknown | null;
 let _elementResolver: ElementResolver | null = null;
 
+/** Event types the dispatcher synthesizes locally (no host binding needed). */
+const SYNTHESIZED_EVENT_TYPES = new Set<EventType>(['change']);
+
 /** Install (or clear) the node-id → element resolver used by event dispatch. */
 export function setEventElementResolver(fn: ElementResolver | null): void {
   _elementResolver = fn;
@@ -209,7 +212,6 @@ export function addEventListener(
   callback: EventCallback,
 ): HandlerId {
   const w = wasm();
-  const handlerId = w.bind_event(node.wasmId, eventType);
   const nodeId = Number(node.wasmId);
   let byKind = _listeners.get(nodeId);
   if (!byKind) {
@@ -222,6 +224,13 @@ export function addEventListener(
     byKind.set(eventType, set);
   }
   set.add(callback);
+  // Synthesized event types (`change` for checkboxes/radios) never need a host
+  // binding: the engine reports toggles as `input` events, which the dispatcher
+  // translates. Binding them would just emit an "unknown event type" warning.
+  if (SYNTHESIZED_EVENT_TYPES.has(eventType)) {
+    return 0n;
+  }
+  const handlerId = w.bind_event(node.wasmId, eventType);
   _handlerEntries.set(handlerId, { node, kind: eventType, cb: callback });
   return handlerId;
 }
@@ -277,6 +286,35 @@ export function dispatchHostEvent(
       console.error('[naivi] guest event listener threw:', error);
     }
   }
+
+  // Checkbox/radio: the engine reports a toggle as an `input` event whose
+  // `value` is the new checked state ("true"/"false") — blitz has no `change`
+  // DOM event. Translate it into a `change` event (browser semantics) so Vue
+  // `v-model` / `@change` handlers fire; the element resolver already synced
+  // `_attrs.checked`, so `event.target.checked` reads the new state.
+  if (type === 'input' && isCheckboxLike(target) && value !== undefined) {
+    const changeHandlers = byKind.get('change');
+    if (changeHandlers && changeHandlers.size > 0) {
+      const changeEvent = makeDomEvent('change', x, y, '', '', value, target);
+      for (const cb of [...changeHandlers]) {
+        try {
+          cb(changeEvent);
+        } catch (error) {
+          console.error('[naivi] guest event listener threw:', error);
+        }
+      }
+    }
+  }
+}
+
+/** Duck-typed checkbox/radio test for a resolved facade element. */
+function isCheckboxLike(el: unknown): boolean {
+  if (!el || typeof el !== 'object') return false;
+  const e = el as { tagName?: string; _attrs?: Record<string, string> };
+  return (
+    e.tagName === 'INPUT' &&
+    (e._attrs?.type === 'checkbox' || e._attrs?.type === 'radio')
+  );
 }
 
 function makeDomEvent(
