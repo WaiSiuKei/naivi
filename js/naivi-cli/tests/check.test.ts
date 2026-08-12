@@ -10,9 +10,20 @@
 //  - dedup by (code, declaration); percent over the dedup'd count (KTD4)
 //  - empty CSS -> 0 hits, percent 100; malformed CSS -> warn, never throw
 
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
-import { renderReport, scanAuthorCss, scanCompiledCss } from '../src/check.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  extractTemplateClasses,
+  renderReport,
+  runCssSubsetCheck,
+  scanAuthorCss,
+  scanCompiledCss,
+  utilityRuleForClass,
+} from '../src/check.js';
 
 describe('property rules', () => {
   it('reports float: left as KC1101 with line/column and parent selector origin', () => {
@@ -258,5 +269,271 @@ describe('renderReport (kiln-shaped report text)', () => {
     const text = renderReport(scanCompiledCss(''));
     expect(text).toContain('(100%)');
     expect(text).not.toContain('×');
+  });
+});
+
+// ── U2: template attribution + runCssSubsetCheck composite entry ────
+//
+// Fixtures are built in a tmp dir (node:fs mkdtempSync) and cleaned up —
+// runCssSubsetCheck reads files relative to cwd only, so it never needs the
+// real naivi monorepo.
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function makeFixture(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'naivi-check-'));
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = join(dir, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  }
+  return dir;
+}
+
+/** Run runCssSubsetCheck capturing stdout; returns { text, error }. */
+function runAndCapture(dir: string): { text: string; error: unknown } {
+  const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  let error: unknown;
+  try {
+    runCssSubsetCheck(dir);
+  } catch (e) {
+    error = e;
+  }
+  const text = spy.mock.calls.map((c) => String(c[0])).join('\n');
+  return { text, error };
+}
+
+describe('extractTemplateClasses', () => {
+  it('extracts static class attributes with 1-based positions', () => {
+    const classes = extractTemplateClasses('<div class="float-left sticky">x</div>');
+    expect([...classes.keys()]).toEqual(['float-left', 'sticky']);
+    expect(classes.get('float-left')).toEqual({ line: 1, column: 13 });
+    expect(classes.get('sticky')).toEqual({ line: 1, column: 24 });
+  });
+
+  it('extracts :class string literals but skips object/ternary bindings (KTD2)', () => {
+    const template = [
+      '<div :class="\'fixed\'">a</div>',
+      '<div :class="{ active: isActive }">b</div>',
+      '<div :class="cond ? \'x\' : \'y\'">c</div>',
+      '<div :class="\'a b\'">d</div>',
+    ].join('\n');
+    const classes = extractTemplateClasses(template);
+    expect(classes.has('fixed')).toBe(true);
+    expect(classes.has('active')).toBe(false);
+    expect(classes.has('x')).toBe(false);
+    expect(classes.has('y')).toBe(false);
+    expect(classes.has('a')).toBe(true);
+    expect(classes.has('b')).toBe(true);
+  });
+
+  it('does not treat :class / @class / .class as a static class attribute', () => {
+    const template = '<div :class="\'fixed\'" @class="handler" .class="x">y</div>';
+    const classes = extractTemplateClasses(template);
+    // Only `fixed` from the :class literal; `handler`/`x` are not classes.
+    expect([...classes.keys()]).toEqual(['fixed']);
+  });
+
+  it('counts lines and columns across a multi-line template', () => {
+    const template = ['<template>', '  <p class="a b"></p>', '</template>'].join('\n');
+    const classes = extractTemplateClasses(template);
+    expect(classes.get('a')).toEqual({ line: 2, column: 13 });
+    expect(classes.get('b')).toEqual({ line: 2, column: 15 });
+  });
+
+  it('extracts from v-bind:class string literals', () => {
+    const classes = extractTemplateClasses('<div v-bind:class="\'fixed\'">x</div>');
+    expect(classes.has('fixed')).toBe(true);
+  });
+});
+
+describe('utilityRuleForClass', () => {
+  it('maps the plan list and natural extensions', () => {
+    expect(utilityRuleForClass('float-left')).toBe('KC1101');
+    expect(utilityRuleForClass('float-right')).toBe('KC1101');
+    expect(utilityRuleForClass('sticky')).toBe('KC1201');
+    expect(utilityRuleForClass('fixed')).toBe('KC1202');
+    expect(utilityRuleForClass('table')).toBe('KC1102');
+    expect(utilityRuleForClass('subgrid')).toBe('KC1103');
+    expect(utilityRuleForClass('has-[.foo]')).toBe('KC1002');
+    expect(utilityRuleForClass('container-[.foo]')).toBe('KC1401');
+    expect(utilityRuleForClass('truncate')).toBe('KC1210');
+    expect(utilityRuleForClass('backdrop-blur-sm')).toBe('KC1340');
+    expect(utilityRuleForClass('mix-blend-multiply')).toBe('KC1341');
+    expect(utilityRuleForClass('contain-layout')).toBe('KC1160');
+  });
+
+  it('returns undefined for business/unmappable class names (KTD2)', () => {
+    expect(utilityRuleForClass('business-card')).toBeUndefined();
+    expect(utilityRuleForClass('my-widget')).toBeUndefined();
+    expect(utilityRuleForClass('flex')).toBeUndefined();
+  });
+});
+
+describe('runCssSubsetCheck — template attribution (KTD2/AE2)', () => {
+  it('attributes a compiled .float-left hit to the .vue static class= line (KC1101, AE1)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.float-left{float:left}\n.x{color:red}\n',
+      'src/App.vue': [
+        '<template>',
+        '  <div class="float-left">hi</div>',
+        '</template>',
+      ].join('\n'),
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/CSS subset check failed: 1 unsupported/);
+      expect(text).toContain('×1');
+      expect(text).toContain('KC1101');
+      expect(text).toContain('use flexbox or grid');
+      expect(text).toContain('.float-left');
+      expect(text).toContain('src/App.vue:2:15');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('attributes a compiled .fixed hit to the :class string-literal position (KC1202, AE2)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.fixed{position:fixed}\n',
+      'src/App.vue': [
+        '<template>',
+        '  <div :class="\'fixed\'">sticky header</div>',
+        '</template>',
+      ].join('\n'),
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1202');
+      expect(text).toContain('src/App.vue:2:17');
+      expect(text).toContain('.fixed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not attribute when the template class maps to nothing (KTD2)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.float-left{float:left}\n.my-widget{position:sticky}\n',
+      'src/App.vue': [
+        '<template>',
+        '  <div class="float-left my-widget business-card">x</div>',
+        '</template>',
+      ].join('\n'),
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      // float-left IS attributed (maps to KC1101)
+      expect(text).toContain('src/App.vue:2:15');
+      // my-widget does NOT map to KC1201 → stays at the compiled CSS
+      expect(text).toContain('KC1201');
+      expect(text).toContain('node_modules/.naive/styles.css:2:1');
+      // exactly two findings — business-card adds nothing
+      expect(text.match(/×/g)).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips template attribution with no .vue files — compiled CSS only', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.float-left{float:left}\n',
+      'src/main.css': 'body{color:red}\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1101');
+      expect(text).toContain('node_modules/.naive/styles.css:1:1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips template attribution for an empty <template>', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.float-left{float:left}\n',
+      'src/App.vue': '<template></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('node_modules/.naive/styles.css:1:1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips with a dim note when styles.css is missing (KTD4)', () => {
+    const dir = makeFixture({
+      'src/App.vue': '<template><div class="float-left">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeUndefined();
+      expect(text).toContain('skipped');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runCssSubsetCheck — author-CSS 3d merge (KTD3)', () => {
+  it('appends an author-CSS KC1320 finding; declarations stay from the compiled scan', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.a{color:red}\n.b{color:blue}\n',
+      'src/main.css': '.hero{transform:perspective(500px)}\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/CSS subset check failed: 1 unsupported/);
+      expect(text).toContain('KC1320');
+      expect(text).toContain('3D transforms are not supported — use the 2D subset');
+      // column = the declaration's property start inside `.hero{...}` (col 7)
+      expect(text).toContain('src/main.css:1:7');
+      expect(text).toMatch(/declarations\s+2/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('dedups an author 3d finding against the compiled scan — no double count, author location wins', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.hero{transform:perspective(500px)}\n.a{color:red}\n',
+      'src/main.css': '.hero{transform:perspective(500px)}\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect(text).toContain('KC1320');
+      expect(text).toContain('×1');
+      expect(text).toContain('src/main.css:1:7');
+      expect(text).not.toContain('node_modules/.naive/styles.css:1:1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runCssSubsetCheck — success path', () => {
+  it('prints a dim confirmation and does not throw when everything is supported', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.a{color:red}\n.b{color:blue}\n',
+      'src/App.vue': '<template><div class="business-card">x</div></template>\n',
+    });
+    try {
+      const { text, error } = runAndCapture(dir);
+      expect(error).toBeUndefined();
+      expect(text).toContain('100% supported');
+      expect(text).not.toContain('×');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

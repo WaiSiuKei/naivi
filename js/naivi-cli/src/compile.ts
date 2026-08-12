@@ -49,7 +49,7 @@ export function findRoot(from = process.cwd()): string | null {
 }
 
 /** Find CSS files in the project and resolve @import chains. */
-function findCSSFiles(targetDir: string): string[] {
+export function findCSSFiles(targetDir: string): string[] {
   const results: string[] = [];
 
   // Check common CSS entry points
@@ -101,7 +101,7 @@ function findCSSFiles(targetDir: string): string[] {
 }
 
 /** Recursively find `.vue` files under `dir` (excluding node_modules/dist). */
-function findVueFiles(dir: string): string[] {
+export function findVueFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const results: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -116,7 +116,7 @@ function findVueFiles(dir: string): string[] {
 }
 
 /** Extract the raw CSS text of every `<style>` block in a `.vue` source. */
-function extractSfcStyles(source: string, filePath: string): string {
+export function extractSfcStyles(source: string, filePath: string): string {
   try {
     const { descriptor } = parseSfc(source);
     return descriptor.styles.map((s) => s.content).join('\n');
