@@ -7,7 +7,7 @@
 // No document, canvas, or requestAnimationFrame — the native window owns the
 // canvas.
 
-import { bindWasm, type WasmExports } from "./native-tree.js";
+import { bindWasm, registerEventCallback, type WasmExports } from "./native-tree.js";
 import { installFontsPendingHook } from "./placeholder-text.js";
 import { naiveRootStyle } from "./page-size.js";
 
@@ -44,6 +44,10 @@ async function mountInner(component: any): Promise<void> {
   stage("start");
   const ffi = getFfi();
   bindWasm(ffi);
+
+  // Route Rust-dispatched events (click/pointer/…) to the JS listener
+  // registry installed by the DOM facade (U5 set_event_callback).
+  registerEventCallback();
 
   // Font-state hook parity: clear placeholders on the trailing edge so they
   // never stay stuck (native fonts resolve in Rust, KTD6).
@@ -95,11 +99,18 @@ async function mountInner(component: any): Promise<void> {
   stage("app-created");
   app.mount(naiveRoot);
   stage("mounted");
+  stage("mounted");
 
-  // Make the Vue-mounted child fill the naiveRoot container.
+  // Make the Vue-mounted child fill the naiveRoot container. Append to any
+  // existing inline style (a `:style` binding on the root) rather than
+  // replacing it, so the child's own styles are not clobbered.
   const topChild = naiveRoot.childNodes[0] as any;
   if (topChild && topChild.nodeType === 1) {
-    topChild.setAttribute("style", "width:100%;height:100%");
+    const prevStyle = topChild.getAttribute("style");
+    topChild.setAttribute(
+      "style",
+      prevStyle ? `${prevStyle};width:100%;height:100%` : "width:100%;height:100%",
+    );
   }
 
   (globalThis as unknown as Record<string, unknown>).__naiveRoot = naiveRoot;

@@ -26,6 +26,11 @@ pub mod document;
 pub mod events;
 pub mod ops;
 
+/// rquickjs (QuickJS-NG) FFI surface for the native channel (feature
+/// `quickjs`; enabled by `naivi-guest-quickjs` and native examples).
+#[cfg(feature = "quickjs")]
+pub mod ffi;
+
 pub use blitz_dom::DocumentConfig;
 pub use blitz_traits::node_id::NodeId;
 pub use document::NaiviDocument;

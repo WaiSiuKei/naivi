@@ -9,6 +9,12 @@ categories.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# The rquickjs (QuickJS-NG) FFI surface for the U5 native channel. Only the
+# native guest and examples enable this; the wasm32 channel stays lean.
+quickjs = ["dep:rquickjs"]
+
 [dependencies]
 # Blitz dependencies
 blitz-dom = { workspace = true, default-features = false, features = ["system-fonts"] }
@@ -16,6 +22,9 @@ blitz-traits = { workspace = true }
 
 # Other dependencies
 rustc-hash = { workspace = true }
+tracing = { workspace = true }
+# U5 native channel FFI (feature-gated)
+rquickjs = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Used by the integration tests to synthesize raw Blitz pointer events

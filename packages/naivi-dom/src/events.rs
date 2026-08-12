@@ -103,6 +103,39 @@ impl NaiviEventKind {
             Self::DblClick => DomEventKind::DoubleClick,
         }
     }
+
+    /// The protocol `u8` encoding (order shared with the guest `EVENT_KINDS`:
+    /// click=0 … dblclick=8). Both wasm and rquickjs channels serialize kinds
+    /// this way.
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Self::Click => 0,
+            Self::PointerDown => 1,
+            Self::PointerUp => 2,
+            Self::PointerMove => 3,
+            Self::Wheel => 4,
+            Self::ContextMenu => 5,
+            Self::MouseEnter => 6,
+            Self::MouseLeave => 7,
+            Self::DblClick => 8,
+        }
+    }
+
+    /// Decode a protocol `u8` back into a kind.
+    pub fn from_u8(kind: u8) -> Option<Self> {
+        Some(match kind {
+            0 => Self::Click,
+            1 => Self::PointerDown,
+            2 => Self::PointerUp,
+            3 => Self::PointerMove,
+            4 => Self::Wheel,
+            5 => Self::ContextMenu,
+            6 => Self::MouseEnter,
+            7 => Self::MouseLeave,
+            8 => Self::DblClick,
+            _ => return None,
+        })
+    }
 }
 
 impl std::str::FromStr for NaiviEventKind {

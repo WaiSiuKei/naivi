@@ -27,6 +27,8 @@ members = [
     "examples/wgpu_texture",
     "examples/wasm_hello",
     "examples/naivi/counter-wasm",
+    "examples/naivi/counter-native",
+    "packages/naivi-guest-quickjs",
 ]
 exclude = ["sites"]
 resolver = "2"
@@ -183,6 +185,10 @@ bitflags = "2.8.0"
 bytemuck = "1"
 rayon = "1"
 thread_local = "1"
+
+# U5 native channel: QuickJS (QuickJS-NG) via rquickjs (pinned to the same
+# version the naive desktop guest uses)
+rquickjs = "=0.12.2"
 
 [profile.profile]
 inherits = "release"

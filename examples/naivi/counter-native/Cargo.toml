@@ -1,0 +1,25 @@
+[package]
+name = "naivi-counter-native"
+description = "naivi (Vue Vapor) counter on blitz-dom, native channel — winit entry embedding the QuickJS guest (U5)"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "naivi-counter-native"
+path = "src/main.rs"
+
+[dependencies]
+# naivi bridge core (U3) + native FFI (U5)
+naivi-dom = { path = "../../../packages/naivi-dom", features = ["quickjs"] }
+naivi-guest-quickjs = { path = "../../../packages/naivi-guest-quickjs" }
+
+# blitz engine + shell + renderer
+anyrender_vello_hybrid = { workspace = true }
+blitz-dom = { workspace = true, features = ["system-fonts"] }
+blitz-shell = { workspace = true, default-features = false, features = ["tracing"] }
+blitz-traits = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
