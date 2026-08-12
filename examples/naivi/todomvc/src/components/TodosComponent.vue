@@ -1,16 +1,15 @@
 <script setup>
-// The stateful container, following the official TodosComponent: owns the
-// todos list, filtering, toggle-all, and the add/delete/toggle/edit handlers;
-// renders TodoHeader / TodoItem / TodoFooter inside the `.todoapp` box.
+// The stateful container — equivalent to blitz's examples/todomvc (Dioxus)
+// and the official TodoMVC Vue example: owns the todos list (starts empty),
+// filtering, toggle-all, and the add/delete/toggle/edit handlers; renders
+// TodoHeader / TodoItem / TodoFooter inside `section.todoapp`.
 //
-// Deviations from the official component (documented):
-// - No vue-router: `filter` is a local ref (the official reads route.name).
-// - Pre-populated seed todos (the official starts empty) so the engine
-//   channels have items to toggle/delete/filter.
+// Engine-channel adaptations (wasm/native have pointer events only):
+// - No vue-router: `filter` is a local ref.
 // - `addTodo` receives the raw input text; on engine channels an empty text
 //   still adds a generated "Task N" (the Add button has no keyboard input to
-//   type into).
-// - Toggle-all is driven by :checked + @click (the official uses v-model).
+//   type into — examples/todomvc's Enter-to-add needs a keyboard).
+// - Toggle / toggle-all are driven by :checked + @click (no `change` event).
 import { computed, ref } from 'vue';
 import TodoFooter from './TodoFooter.vue';
 import TodoHeader from './TodoHeader.vue';
@@ -19,11 +18,8 @@ import TodoItem from './TodoItem.vue';
 const isEngineChannel =
   (globalThis).__NAIVE_MODE === 'wasm' || typeof window === 'undefined';
 
-const todos = ref([
-  { id: '1', title: 'Taste JavaScript', completed: true },
-  { id: '2', title: 'Buy a unicorn', completed: false },
-  { id: '3', title: 'Rule the web', completed: false },
-]);
+// Starts empty, like examples/todomvc (`HashMap::new()`).
+const todos = ref([]);
 const filter = ref('all');
 
 const filters = {
@@ -52,7 +48,7 @@ function addTodo(value) {
       : isEngineChannel
         ? `Task ${todos.value.length + 1}` // engine Add with empty input
         : null;
-  if (title === null) return; // web: empty input = no-op (official behavior)
+  if (title === null) return; // web: empty input = no-op
   todos.value.push({ id: uuid(), title, completed: false });
 }
 function deleteTodo(todo) {
@@ -79,15 +75,13 @@ function setFilter(value) {
 </script>
 
 <template>
-  <div class="todoapp">
+  <section class="todoapp">
     <TodoHeader @add-todo="addTodo" />
 
-    <main class="main" v-show="todos.length > 0">
-      <div class="toggle-all-container">
-        <input type="checkbox" id="toggle-all-input" class="toggle-all"
-               :checked="toggleAllChecked" />
-        <label class="toggle-all-label" @click="toggleAll">❯</label>
-      </div>
+    <section class="main" v-if="todos.length > 0">
+      <input type="checkbox" id="toggle-all" class="toggle-all"
+             :checked="toggleAllChecked" />
+      <label for="toggle-all" @click="toggleAll">❯</label>
       <ul class="todo-list">
         <TodoItem
           v-for="todo in filteredTodos"
@@ -98,7 +92,7 @@ function setFilter(value) {
           @toggle-todo="toggleTodo"
         />
       </ul>
-    </main>
+    </section>
 
     <TodoFooter
       :todos="todos"
@@ -106,5 +100,5 @@ function setFilter(value) {
       @filter-change="setFilter"
       @delete-completed="deleteCompleted"
     />
-  </div>
+  </section>
 </template>

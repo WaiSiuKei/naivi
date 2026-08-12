@@ -1,9 +1,8 @@
 <script setup lang="ts">
-// naivi TodoMVC — root shell + author CSS (U6). The component tree follows
-// the official TodoMVC Vue example
-// (github.com/tastejs/todomvc/tree/gh-pages/examples/vue): TodosComponent
-// renders `.todoapp > header/main/footer` via TodoHeader / TodoItem /
-// TodoFooter. Engine-channel adaptations are documented in each component.
+// naivi TodoMVC — root shell + author CSS (U6). The component tree is
+// equivalent to blitz's examples/todomvc (Dioxus): section.todoapp with
+// TodoHeader / TodoItem / TodoFooter, plus the standard `.info` footer.
+// Engine-channel adaptations are documented in each component.
 import TodosComponent from './components/TodosComponent.vue';
 
 // Inline styles: only the viewport-filling shell — the rest lives in the
@@ -21,6 +20,11 @@ const shellStyle: Record<string, string> = {
 <template>
   <div class="todomvc" :style="shellStyle">
     <TodosComponent />
+    <footer class="info">
+      <p>Double-click to edit a todo</p>
+      <p>Created by <a href="#/" @click.prevent>jkelleyrtp</a></p>
+      <p>Part of <a href="#/" @click.prevent>TodoMVC</a></p>
+    </footer>
   </div>
 </template>
 
@@ -80,25 +84,22 @@ const shellStyle: Record<string, string> = {
 .main {
   border-top: 1px solid #e6e6e6;
 }
-.toggle-all-container {
-  display: flex;
-  align-items: center;
-  padding-left: 8px;
-}
 .toggle-all {
   width: 1px;
   height: 1px;
   opacity: 0;
+  position: absolute;
 }
-.toggle-all-label {
+.toggle-all + label {
   width: 60px;
   height: 34px;
   font-size: 22px;
   line-height: 34px;
+  text-align: center;
   color: #e6e6e6;
   cursor: pointer;
 }
-.toggle-all-label:hover {
+.toggle-all + label:hover {
   color: #737373;
 }
 .todo-list {
@@ -193,21 +194,19 @@ const shellStyle: Record<string, string> = {
   margin: 0;
   padding: 0;
 }
-.filter-link {
+.filters a {
   margin: 3px;
   padding: 3px 7px;
   border: 1px solid transparent;
   border-radius: 3px;
-  background: transparent;
   color: inherit;
-  font-family: inherit;
-  font-size: inherit;
+  text-decoration: none;
   cursor: pointer;
 }
-.filter-link:hover {
+.filters a:hover {
   border-color: rgba(175, 47, 47, 0.1);
 }
-.filter-link.selected {
+.filters a.selected {
   border-color: rgba(175, 47, 47, 0.2);
 }
 .clear-completed {
@@ -220,6 +219,21 @@ const shellStyle: Record<string, string> = {
 }
 .clear-completed:hover {
   color: #af5b5e;
+}
+.info {
+  margin: 1.5rem 0 0;
+  color: #bfbfbf;
+  font-size: 0.8rem;
+  text-align: center;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.info p {
+  margin: 0.3rem 0;
+}
+.info a {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 400;
 }
 button {
   font-family: inherit;

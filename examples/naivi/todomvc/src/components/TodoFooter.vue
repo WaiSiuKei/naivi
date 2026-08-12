@@ -1,7 +1,8 @@
 <script setup>
-// Official TodoFooter uses vue-router RouterLink for the filters; naivi has no
-// router (and blitz navigates `<a href>` clicks), so the filters are buttons
-// that keep the official `.selected` styling.
+// Equivalent to examples/todomvc's ListFooter: todo-count, filters as
+// `<a href="#/...">` with the `.selected` class, and Clear completed. The
+// hash hrefs are same-document fragments (blitz scrolls to a matching id;
+// none exists, so no navigation) and @click.prevent still drives the filter.
 import { computed } from 'vue';
 
 const props = defineProps(['todos', 'filter']);
@@ -16,25 +17,25 @@ function setFilter(value) {
 </script>
 
 <template>
-  <footer class="footer" v-show="todos.length > 0">
+  <footer class="footer" v-if="todos.length > 0">
     <span class="todo-count">
-      <strong>{{ remaining }}</strong> {{ remaining === 1 ? 'item' : 'items' }} left
+      <strong>{{ remaining }} </strong><span>{{ remaining === 1 ? 'item' : 'items' }}</span> left
     </span>
     <ul class="filters">
       <li>
-        <button class="filter-link" :class="{ selected: filter === 'all' }"
-                @click="setFilter('all')">All</button>
+        <a href="#/" :class="{ selected: filter === 'all' }"
+           @click.prevent="setFilter('all')">All</a>
       </li>
       <li>
-        <button class="filter-link" :class="{ selected: filter === 'active' }"
-                @click="setFilter('active')">Active</button>
+        <a href="#/active" :class="{ selected: filter === 'active' }"
+           @click.prevent="setFilter('active')">Active</a>
       </li>
       <li>
-        <button class="filter-link" :class="{ selected: filter === 'completed' }"
-                @click="setFilter('completed')">Completed</button>
+        <a href="#/completed" :class="{ selected: filter === 'completed' }"
+           @click.prevent="setFilter('completed')">Completed</a>
       </li>
     </ul>
-    <button class="clear-completed" v-show="hasCompleted"
+    <button class="clear-completed" v-if="hasCompleted"
             @click="$emit('delete-completed')">Clear completed</button>
   </footer>
 </template>
