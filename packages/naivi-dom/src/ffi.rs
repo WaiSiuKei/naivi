@@ -150,6 +150,7 @@ pub fn build_naive_namespace<'js>(ctx: Ctx<'js>) -> Result<Object<'js>> {
     naive.set("clear_attr", Function::new(ctx.clone(), clear_attr)?)?;
     naive.set("set_style", Function::new(ctx.clone(), set_style)?)?;
     naive.set("remove_style", Function::new(ctx.clone(), remove_style)?)?;
+    naive.set("add_stylesheet", Function::new(ctx.clone(), add_stylesheet)?)?;
     naive.set("append_child", Function::new(ctx.clone(), append_child)?)?;
     naive.set("insert_before", Function::new(ctx.clone(), insert_before)?)?;
     naive.set("insert_after", Function::new(ctx.clone(), insert_after)?)?;
@@ -213,6 +214,11 @@ fn set_style<'js>(_ctx: Ctx<'js>, node_id: BigInt<'js>, key: String, value: Stri
         return Ok(());
     };
     with_core(|core| core.set_style(id, &key, &value));
+    Ok(())
+}
+
+fn add_stylesheet<'js>(_ctx: Ctx<'js>, css: String) -> Result<()> {
+    with_core(|core| core.add_stylesheet(&css));
     Ok(())
 }
 

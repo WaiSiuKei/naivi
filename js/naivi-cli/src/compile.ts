@@ -1,11 +1,15 @@
-// Shared compile pipeline: collects the project's CSS, runs it through the
-// Tailwind + naive-css AOT pipeline, and writes `node_modules/.naive/styles.json`.
-// Used by both `naive wasm` (cli.ts) and `naive desktop` (desktop.ts).
+// Shared compile pipeline (U6): collects the project's CSS text — SFC
+// `<style>` blocks plus standalone CSS files — and writes
+// `node_modules/.naive/styles.css`. The runtime injects that text as a stylo
+// author stylesheet (`add_stylesheet`), so class / tag / `:hover` / `:checked`
+// selectors are matched natively by blitz's engine.
+//
+// The old naive rule-table pipeline (Tailwind + the Rust `naive-css` binary →
+// `styles.json`) is removed: naivi's AOT CSS output is plain CSS text (KTD4).
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { execSync } from 'node:child_process';
-import { compileTailwindCSS } from './tailwind.ts';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { parse as parseSfc } from '@vue/compiler-sfc';
 
 const C = {
   ok:   (s: string) => `\x1b[32m✓\x1b[0m ${s}`,
@@ -87,131 +91,64 @@ function findCSSFiles(targetDir: string): string[] {
   return results;
 }
 
-/** Newest mtime (ms) among the naive-css source files (crates/naive-css/src, all .rs) plus Cargo.toml, or 0 if unknown. */
-function naiveCSSSourceNewestMtime(naiveRoot: string): number {
-  let newest = 0;
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name);
-      if (entry.isDirectory()) walk(p);
-      else if (entry.name.endsWith('.rs')) {
-        try {
-          const m = statSync(p).mtimeMs;
-          if (m > newest) newest = m;
-        } catch { /* ignore */ }
-      }
+/** Recursively find `.vue` files under `dir` (excluding node_modules/dist). */
+function findVueFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const results: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+      results.push(...findVueFiles(join(dir, entry.name)));
+    } else if (entry.name.endsWith('.vue')) {
+      results.push(join(dir, entry.name));
     }
-  };
-  const srcDir = join(naiveRoot, 'crates', 'naive-css', 'src');
-  if (existsSync(srcDir)) walk(srcDir);
-  try {
-    const m = statSync(join(naiveRoot, 'crates', 'naive-css', 'Cargo.toml')).mtimeMs;
-    if (m > newest) newest = m;
-  } catch { /* ignore */ }
-  return newest;
+  }
+  return results;
 }
 
-/** Resolve (or build) an up-to-date Rust naive-css binary, or null. */
-function resolveNaiveCSSBinary(targetDir: string): string | null {
+/** Extract the raw CSS text of every `<style>` block in a `.vue` source. */
+function extractSfcStyles(source: string, filePath: string): string {
   try {
-    const naiveRoot = findRoot(targetDir) || process.cwd();
-    const possiblePaths = [
-      join(naiveRoot, 'target', 'release', 'naive-css'),
-      join(naiveRoot, 'target', 'debug', 'naive-css'),
-    ];
-
-    // Prefer an up-to-date binary. A leftover `target/{debug,release}/naive-css`
-    // from an older checkout silently produces wrong output (e.g. `font-size:
-    // 1.25rem` emitted as 1.25 instead of 20px), so rebuild whenever the Rust
-    // source is newer than every existing binary.
-    const srcNewest = naiveCSSSourceNewestMtime(naiveRoot);
-    let binaryPath = '';
-    for (const p of possiblePaths) {
-      if (existsSync(p)) {
-        try {
-          if (statSync(p).mtimeMs >= srcNewest) {
-            binaryPath = p;
-            break;
-          }
-        } catch { /* ignore */ }
-      }
-    }
-
-    if (!binaryPath) {
-      // No up-to-date binary: build (or rebuild) the debug one.
-      console.log(C.dim('[naive] Building Rust AOT CSS compiler (first run or stale)...'));
-      execSync('cargo build -p naive-css 2>&1', { cwd: naiveRoot, stdio: 'pipe', timeout: 120000 });
-      binaryPath = join(naiveRoot, 'target', 'debug', 'naive-css');
-    }
-
-    if (!existsSync(binaryPath)) return null;
-    return binaryPath;
-  } catch {
-    return null;
+    const { descriptor } = parseSfc(source);
+    return descriptor.styles.map((s) => s.content).join('\n');
+  } catch (error) {
+    console.warn(C.warn(`Failed to parse SFC styles in ${filePath}: ${(error as Error).message}`));
+    return '';
   }
 }
 
-/**
- * Run the Rust naive-css binary for the runtime rule table. Returns the
- * parsed `{ rules: [...] }` object, or null when unavailable. Selector
- * hard-fails are rethrown (same policy as the class table).
- */
-function tryRunNaiveCSSRuleTable(css: string, targetDir: string): { rules: unknown[] } | null {
-  try {
-    const naiveRoot = findRoot(targetDir) || process.cwd();
-    const binaryPath = resolveNaiveCSSBinary(targetDir);
-    if (!binaryPath) return null;
-
-    const tmpCSS = join(targetDir, 'node_modules', '.naive', '_compile.css');
-    mkdirSync(dirname(tmpCSS), { recursive: true });
-    writeFileSync(tmpCSS, css);
-
-    const result = execSync(`"${binaryPath}" --rule-table "${tmpCSS}"`, {
-      cwd: naiveRoot,
-      stdio: 'pipe',
-      timeout: 30000,
-    });
-    return JSON.parse(result.toString('utf8')) as { rules: unknown[] };
-  } catch (err) {
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? '';
-    if (stderr.includes('Error compiling CSS')) {
-      throw err;
-    }
-    return null;
-  }
-}
-
-/** Compile the project's CSS into `node_modules/.naive/styles.json`. */
+/** Compile the project's CSS text into `node_modules/.naive/styles.css`. */
 export async function compileIfNeeded(targetDir: string): Promise<string> {
   const naiveDir = join(targetDir, 'node_modules', '.naive');
   mkdirSync(naiveDir, { recursive: true });
 
-  // Collect all CSS to compile
-  let allCSS = '';
-  const cssFiles = findCSSFiles(targetDir);
-  for (const cssFile of cssFiles) {
+  const parts: string[] = [];
+
+  // Standalone CSS entry points (main.css, src/main.css, …).
+  for (const cssFile of findCSSFiles(targetDir)) {
     try {
-      allCSS += readFileSync(cssFile, 'utf8') + '\n';
+      parts.push(readFileSync(cssFile, 'utf8'));
     } catch { /* skip */ }
   }
 
-  // Let the project's own tailwindcss dependency generate the full utility
-  // CSS, then pre-parse it into the single CompiledStyleSheet (plan 062).
-  const tailwindCSS = await compileTailwindCSS(targetDir, allCSS);
-  if (tailwindCSS) {
-    allCSS = tailwindCSS;
-    console.log(C.ok('Generated Tailwind CSS via tailwindcss'));
+  // SFC `<style>` blocks (AOT CSS text — U6).
+  const srcDir = join(targetDir, 'src');
+  for (const vueFile of findVueFiles(srcDir)) {
+    try {
+      const styles = extractSfcStyles(readFileSync(vueFile, 'utf8'), vueFile);
+      if (styles.trim()) {
+        parts.push(`/* ${relative(targetDir, vueFile)} */\n${styles}`);
+      }
+    } catch { /* skip */ }
   }
 
-  // Rust AOT is the only compile path: pre-parse into a single
-  // CompiledStyleSheet ({ rules: [...] } with specificity/order).
-  const ruleTable = tryRunNaiveCSSRuleTable(allCSS, targetDir);
-  if (!ruleTable || !Array.isArray(ruleTable.rules)) {
-    throw new Error('Rust AOT stylesheet compile failed — no rules emitted');
-  }
-  console.log(C.ok(`Compiled CSS rules → ${ruleTable.rules.length} rules`));
-
-  const outFile = join(naiveDir, 'styles.json');
-  writeFileSync(outFile, JSON.stringify({ rules: ruleTable.rules }));
+  const css = parts.filter((p) => p.trim()).join('\n\n');
+  const outFile = join(naiveDir, 'styles.css');
+  writeFileSync(outFile, css);
+  console.log(
+    css.trim()
+      ? C.ok(`Compiled author CSS (${css.length} chars) → ${outFile}`)
+      : C.dim('No author CSS to compile (empty styles.css)'),
+  );
   return outFile;
 }

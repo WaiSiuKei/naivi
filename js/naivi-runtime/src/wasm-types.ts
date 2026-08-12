@@ -97,6 +97,8 @@ export interface WasmExports {
   set_event_callback(cb: (nodeId: number, kind: number, x: number, y: number) => void): void;
   /** Force-drain queued events (optional pump; the app loop drains per frame). */
   tick(): void;
+  /** Inject an author stylesheet (U6: SFC `<style>` / AOT CSS text) into stylo. */
+  add_stylesheet(css: string): void;
 
   // Legacy placeholder-measure members, retained for the desktop (rquickjs)
   // FFI channel (U5). The U4 wasm channel binds no-ops.

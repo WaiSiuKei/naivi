@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'vite';
+import { compileIfNeeded } from './compile.ts';
 import { loadNaiveConfig } from './config.ts';
 import { loadPageViteConfig, resolveDesktopViteConfig } from './vite-config.ts';
 
@@ -126,16 +127,19 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
     console.log(C.dim('[naivi] desktop: `main` entry ignored in U5 (page-only flow)'));
   }
 
+  console.log(C.dim('[naivi] Compiling styles...'));
+  const stylesPath = await compileIfNeeded(cwd);
+
   console.log(C.dim('[naivi] Bundling page...'));
   const pageEntry = findPageEntry(cwd);
   const pageBundlePath = await buildDesktopBundle(root, cwd, pageEntry);
 
   console.log(
-    C.dim(`[naivi] Running guest: cargo run -p naivi-counter-native -- ${pageBundlePath}`),
+    C.dim(`[naivi] Running guest: cargo run -p naivi-counter-native -- ${pageBundlePath} ${stylesPath}`),
   );
   // Blocking: the guest owns the window event loop until it closes. Pass argv
   // directly (no shell interpolation) so paths with $/backticks/quotes work.
-  execFileSync('cargo', ['run', '-p', 'naivi-counter-native', '--', pageBundlePath], {
+  execFileSync('cargo', ['run', '-p', 'naivi-counter-native', '--', pageBundlePath, stylesPath], {
     cwd: root,
     stdio: 'inherit',
   });

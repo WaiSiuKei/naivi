@@ -197,6 +197,12 @@ pub fn set_style(node_id: u64, key: &str, value: &str) {
     with_core(|core| core.set_style(NodeId::from_u64(node_id), key, value));
 }
 
+/// Inject an author stylesheet (U6: SFC `<style>` / AOT CSS text) into stylo.
+#[wasm_bindgen]
+pub fn add_stylesheet(css: &str) {
+    with_core(|core| core.add_stylesheet(css));
+}
+
 /// Append `child` as the last child of `parent`.
 #[wasm_bindgen]
 pub fn append_child(parent: u64, child: u64) {

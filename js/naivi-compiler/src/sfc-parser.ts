@@ -34,3 +34,20 @@ export function getScriptContent(descriptor: SFCDescriptor): string {
   }
   return '';
 }
+
+/** Extract the raw CSS of every `<style>` block in the SFC descriptor. */
+export function getSfcStyles(descriptor: SFCDescriptor): string {
+  return descriptor.styles.map((s) => s.content).join('\n');
+}
+
+/**
+ * Compile an SFC source's `<style>` blocks to plain CSS text (U6 AOT output).
+ *
+ * The runtime injects this text as a stylo author stylesheet, so class / tag
+ * / attribute / `:hover` / `:active` / `:checked` selectors are matched
+ * natively by blitz's style engine (KTD4).
+ */
+export function compileSfcStyles(source: string): string {
+  const { descriptor } = parseSFC(source);
+  return getSfcStyles(descriptor);
+}

@@ -3,7 +3,7 @@
 // Compiler does build-time IR generation. Class styles are produced by the
 // CLI's single-source styles.json pipeline, not by a Tailwind re-parser.
 
-export { parseSFC, getTemplateContent, getScriptContent } from './sfc-parser.js';
+export { parseSFC, getTemplateContent, getScriptContent, getSfcStyles, compileSfcStyles } from './sfc-parser.js';
 export { compileCSS, compileCSSFull } from './css-compiler.js';
 export { compileVueToJSON } from './compile-vue-to-json.js';
 export { serializeOutput } from './ir-types.js';

@@ -169,6 +169,20 @@ impl OpsCore {
         mutr.remove_style_property(node_id, name);
     }
 
+    /// Inject an author stylesheet (U6: SFC `<style>` / AOT CSS text) into
+    /// stylo, attached to the document's root element (the facade body).
+    ///
+    /// Selectors match the whole document (`class` / tag / attribute /
+    /// `:hover` / `:active` / `:checked` are handled natively by stylo);
+    /// inline styles set via [`Self::set_style`] win the cascade (author
+    /// inline > author rules).
+    pub fn add_stylesheet(&mut self, css: &str) {
+        let mut doc = self.doc.borrow_mut();
+        let root = doc.root_element().id;
+        let sheet = doc.make_stylesheet(css, style::stylesheets::Origin::Author);
+        doc.add_stylesheet_for_node(sheet, root);
+    }
+
     // ---- event bindings ----
 
     /// Bind `kind` on `node_id`.

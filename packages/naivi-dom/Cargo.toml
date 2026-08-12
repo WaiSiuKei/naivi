@@ -20,6 +20,9 @@ quickjs = ["dep:rquickjs"]
 blitz-dom = { workspace = true, default-features = false, features = ["system-fonts"] }
 blitz-traits = { workspace = true }
 
+# Stylo (for the author-stylesheet Origin used by the U6 CSS injection)
+style = { workspace = true }
+
 # Other dependencies
 rustc-hash = { workspace = true }
 tracing = { workspace = true }

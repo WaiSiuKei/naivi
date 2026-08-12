@@ -146,15 +146,26 @@ function childIndex(parent: NaiveNode, child: NaiveNode): number {
 // ── CSS class → style property resolver ────────────────────────────
 
 /**
- * Load CSS class styles from the build-time compiled styles.json.
+ * Inject the build-time author stylesheet (U6).
  *
- * U4: the author-stylesheet path (`set_rule_table` / `__NAIVE_STYLES` /
- * `node_modules/.naive/styles.json`) is replaced by the U6 styles work, and
- * `set_rule_table` is no longer part of the protocol. The runtime tolerates
- * its absence with a no-op; the mount path still awaits this for ordering.
+ * The CLI compiles SFC `<style>` blocks (and project CSS) to CSS text and
+ * delivers it as `globalThis.__NAIVE_CSS`:
+ * - wasm channel: `naivi wasm --release` inlines it into `guest.js`;
+ * - native channel: `naivi desktop` passes `node_modules/.naive/styles.css`
+ *   and the host evals `__NAIVE_CSS` before the guest bundle.
+ *
+ * The text is injected as a stylo author stylesheet (`add_stylesheet`), so
+ * class / tag / attribute / `:hover` / `:active` / `:checked` selectors are
+ * matched natively by blitz's style engine. Inline `:style` bindings
+ * (el.style → `set_style`) win the cascade.
  */
 export async function loadCSSClassStyles(): Promise<void> {
-  /* no-op in U4 — author stylesheets land in U6 */
+  const css = (globalThis as unknown as Record<string, unknown>).__NAIVE_CSS;
+  if (typeof css !== "string" || css.trim() === "") {
+    return;
+  }
+  const { getWasm } = await import("./native-tree.js");
+  getWasm().add_stylesheet(css);
 }
 
 /**

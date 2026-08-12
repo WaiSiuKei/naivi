@@ -197,6 +197,51 @@ fn style_properties_apply_and_remove() {
     }
 }
 
+/// U6: an injected author stylesheet (`add_stylesheet`) must be matched by
+/// stylo — a `.foo` class rule sets the div's computed background.
+#[test]
+fn add_stylesheet_class_rule_applies() {
+    let (mut ops, body) = make_doc_with_skeleton();
+    let div = ops.create_element("div");
+    ops.append_child(body, div);
+    ops.set_attr(div, "class", "foo");
+    ops.set_style(div, "width", "100px");
+    ops.set_style(div, "height", "40px");
+
+    let computed_bg = |doc: &BaseDocument, id: NodeId| -> String {
+        let node = &doc.tree()[id];
+        let styles = node.primary_styles().expect("div should be styled");
+        format!("{:?}", styles.clone_background_color())
+    };
+
+    // Control: before the stylesheet the div has no background.
+    let before = {
+        let mut doc = ops.doc.borrow_mut();
+        doc.resolve(0.0);
+        computed_bg(&doc, div)
+    };
+    assert!(
+        before.contains("0.0"),
+        "control: background should be transparent before the stylesheet: {before}"
+    );
+
+    // U6: inject the author CSS text and resolve.
+    ops.add_stylesheet(".foo { background-color: rgb(10, 20, 30); }");
+    let after = {
+        let mut doc = ops.doc.borrow_mut();
+        doc.resolve(0.0);
+        computed_bg(&doc, div)
+    };
+    assert_ne!(
+        before, after,
+        "author stylesheet should change the computed background"
+    );
+    assert!(
+        after.contains("0.039") && after.contains("0.078"),
+        "author .foo rule should set background rgb(10,20,30): {after}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // sibling insertion / replacement
 // ---------------------------------------------------------------------------

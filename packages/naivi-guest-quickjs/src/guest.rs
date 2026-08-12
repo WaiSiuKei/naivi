@@ -80,6 +80,15 @@ impl QuickJsGuest {
         self.initialized
     }
 
+    /// Eval a snippet in the guest context (host-side injection, e.g. the U6
+    /// `__NAIVE_CSS` global, tests, diagnostics).
+    pub fn eval_script(&self, source: &str) -> rquickjs::Result<()> {
+        self.context.with(|ctx| {
+            let _: Value = ctx.eval(source)?;
+            Ok(())
+        })
+    }
+
     /// Pump pending jobs (microtasks) for this frame.
     ///
     /// Must run outside `ctx.with` — the runtime lock is held inside `with`,

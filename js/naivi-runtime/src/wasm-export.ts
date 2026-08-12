@@ -35,6 +35,7 @@ export interface WasmBindgenModule {
   unbind_event?(handlerId: bigint): void;
   set_event_callback?(cb: (nodeId: number, kind: number, x: number, y: number) => void): void;
   tick?(): void;
+  add_stylesheet?(css: string): void;
   set_placeholder_measures?(opsJson: string): boolean;
   clear_placeholder_measures?(): boolean;
 }
@@ -95,6 +96,9 @@ export function createWasmExports(wasm: WasmBindgenModule): WasmExports {
     },
     tick: () => {
       wasm.tick?.();
+    },
+    add_stylesheet: (css: string) => {
+      wasm.add_stylesheet?.(css);
     },
     // Legacy placeholder-measure members — no-ops on the U4 wasm channel.
     set_placeholder_measures: () => false,

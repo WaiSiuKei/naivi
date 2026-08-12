@@ -23,3 +23,6 @@ blitz-traits = { workspace = true }
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# JS-string encoding for the injected __NAIVE_CSS global (U6)
+serde_json = { workspace = true }

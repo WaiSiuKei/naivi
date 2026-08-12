@@ -115,6 +115,18 @@ fn main() {
         }
     };
 
+    // U6: the CLI compiles the author CSS to `node_modules/.naive/styles.css`
+    // and passes it as argv[2]. Inject it as `globalThis.__NAIVE_CSS` before
+    // evaling the bundle so `loadCSSClassStyles()` can add_stylesheet it.
+    let styles_css = args
+        .get(2)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    let author_css = styles_css.trim();
+    if !author_css.is_empty() {
+        tracing::info!("naivi native: injecting author stylesheet ({} chars)", author_css.len());
+    }
+
     // The document uses system fonts (native): blitz's default font ctx
     // registers system fonts on non-wasm targets (blitz-dom "system-fonts").
     let mut doc = NaiviDocument::with_config(DocumentConfig::default());
@@ -134,6 +146,13 @@ fn main() {
     if let Err(error) = guest.init(&bundle) {
         eprintln!("guest bundle eval failed: {error}");
         std::process::exit(1);
+    }
+    // Inject the author CSS (U6) — the guest reads `globalThis.__NAIVE_CSS`.
+    if !author_css.is_empty() {
+        let source = format!("globalThis.__NAIVE_CSS = {};", serde_json::to_string(author_css).expect("css json"));
+        guest
+            .eval_script(&source)
+            .expect("inject __NAIVE_CSS failed");
     }
     // Kick off the async mount (the page bundle's `mount(App)` starts on
     // eval; the first microtask pump advances it before the first frame).
