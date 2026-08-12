@@ -31,12 +31,15 @@ export type EventType =
   | 'contextmenu'
   | 'mouseenter'
   | 'mouseleave'
-  | 'dblclick';
+  | 'dblclick'
+  | 'keydown'
+  | 'keyup'
+  | 'input';
 export type HandlerId = bigint;
 
 /**
  * The `u8` event-kind encoding shared with the Rust host
- * (`NaiviEventKind::ALL` order: click=0 … dblclick=8).
+ * (`NaiviEventKind::ALL` order: click=0 … input=11).
  */
 export const EVENT_KINDS: readonly EventType[] = [
   'click',
@@ -48,6 +51,9 @@ export const EVENT_KINDS: readonly EventType[] = [
   'mouseenter',
   'mouseleave',
   'dblclick',
+  'keydown',
+  'keyup',
+  'input',
 ] as const;
 
 /** Map an [`EventType`] to its protocol `u8` kind. */
@@ -68,6 +74,12 @@ export interface NaiveDomEvent {
   currentTarget: unknown;
   clientX: number;
   clientY: number;
+  /** Keyboard key (e.g. `"Enter"`) for key events; `""` otherwise. */
+  key: string;
+  /** Physical keyboard code for key events; `""` otherwise. */
+  code: string;
+  /** Full input value for `input` events; `""` otherwise. */
+  value: string;
   preventDefault(): void;
   stopPropagation(): void;
 }
@@ -93,8 +105,18 @@ export interface WasmExports {
   bind_event(node_id: bigint, kind: EventType): bigint;
   /** Remove the bindings for the given handler id (a node id). */
   unbind_event(handler_id: bigint): void;
-  /** Rust→JS event callback: `(nodeId, kind, x, y) => void`. */
-  set_event_callback(cb: (nodeId: number, kind: number, x: number, y: number) => void): void;
+  /** Rust→JS event callback: `(nodeId, kind, x, y, key, code, value) => void`. */
+  set_event_callback(
+    cb: (
+      nodeId: number,
+      kind: number,
+      x: number,
+      y: number,
+      key?: string,
+      code?: string,
+      value?: string,
+    ) => void,
+  ): void;
   /** Force-drain queued events (optional pump; the app loop drains per frame). */
   tick(): void;
   /** Inject an author stylesheet (U6: SFC `<style>` / AOT CSS text) into stylo. */

@@ -6,11 +6,11 @@
 
 use blitz_dom::{BaseDocument, Document, DocumentConfig, LocalName, NodeId, local_name};
 use blitz_traits::events::{
-    BlitzPointerEvent, BlitzPointerId, MouseEventButton, MouseEventButtons, Point, PointerCoords,
-    PointerDetails, UiEvent,
+    BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, KeyState, MouseEventButton,
+    MouseEventButtons, Point, PointerCoords, PointerDetails, UiEvent,
 };
 use blitz_traits::shell::{ColorScheme, DummyShellProvider, Viewport};
-use keyboard_types::Modifiers;
+use keyboard_types::{Code, Key, Location, Modifiers};
 use naivi_dom::{EventSink, NaiviDocument, NaiviEvent, NaiviEventKind, NaiviOp, OpsCore};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -449,6 +449,97 @@ fn handle_ui_event_queues_bound_click_only() {
 
     assert!(!doc.poll(None), "no bound events should be queued");
     assert_eq!(recorded.borrow().len(), 1);
+}
+
+/// Build a raw keyboard event with default modifiers.
+fn key_event(key: Key, code: Code, state: KeyState) -> BlitzKeyEvent {
+    BlitzKeyEvent {
+        key,
+        code,
+        modifiers: Modifiers::default(),
+        location: Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state,
+        text: None,
+    }
+}
+
+/// Keyboard + text-input events flow through the queue with their payloads.
+///
+/// A focused `<input>` bound to `keydown`/`keyup`/`input`: typing a character
+/// queues a `KeyDown` AND (through the engine's text-input default action) an
+/// `Input` event carrying the updated value; releasing Enter queues a `KeyUp`
+/// carrying `key == "Enter"`.
+#[test]
+fn handle_ui_event_queues_bound_keyboard_and_input() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    // A text input at the origin, bound to the keyboard/input kinds.
+    let input = ops.create_element("input");
+    ops.append_child(body, input);
+    ops.set_style(input, "position", "absolute");
+    ops.set_style(input, "left", "0px");
+    ops.set_style(input, "top", "0px");
+    ops.set_style(input, "width", "100px");
+    ops.set_style(input, "height", "20px");
+    ops.bind_event(input, NaiviEventKind::KeyDown);
+    ops.bind_event(input, NaiviEventKind::KeyUp);
+    ops.bind_event(input, NaiviEventKind::Input);
+
+    // Lay out (creates the input's text editor) and focus it by clicking inside.
+    doc.inner_mut().resolve(0.0);
+    let click = main_button_pointer_event(50.0, 10.0);
+    doc.handle_ui_event(UiEvent::PointerDown(click.clone()));
+    doc.handle_ui_event(UiEvent::PointerUp(click));
+
+    // Type "a" (KeyDown + generated Input), then release Enter (KeyUp).
+    doc.handle_ui_event(UiEvent::KeyDown(key_event(
+        Key::Character("a".into()),
+        Code::KeyA,
+        KeyState::Pressed,
+    )));
+    doc.handle_ui_event(UiEvent::KeyUp(key_event(Key::Enter, Code::Enter, KeyState::Released)));
+
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    doc.set_event_sink(Box::new(RecordingSink(Rc::clone(&recorded))));
+    assert!(doc.poll(None), "poll should drain the queued events");
+
+    let drained = recorded.borrow();
+    let keydown = drained
+        .iter()
+        .find(|e| e.kind == NaiviEventKind::KeyDown)
+        .expect("KeyDown queued");
+    let keyup = drained
+        .iter()
+        .find(|e| e.kind == NaiviEventKind::KeyUp)
+        .expect("KeyUp queued");
+    let input_evt = drained
+        .iter()
+        .find(|e| e.kind == NaiviEventKind::Input)
+        .expect("Input queued from the text-input default action");
+
+    assert_eq!(keydown.node, input);
+    assert_eq!(keyup.node, input);
+    assert_eq!(keyup.key, "Enter");
+    assert_eq!(keyup.code, "Enter");
+    assert_eq!(input_evt.value, "a");
+    // The text input's editor actually holds the typed text.
+    let doc_ref = doc.inner();
+    let text_input = doc_ref
+        .get_node(input)
+        .unwrap()
+        .element_data()
+        .and_then(|e| e.text_input_data())
+        .expect("input has a text editor after layout");
+    assert_eq!(text_input.editor.raw_text(), "a");
 }
 
 // ---------------------------------------------------------------------------

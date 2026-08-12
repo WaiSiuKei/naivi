@@ -585,6 +585,13 @@ impl ElementData {
         guard: &SharedRwLock,
         url_extra_data: UrlExtraData,
     ) -> bool {
+        // An empty value removes the inline declaration — the browser semantics
+        // of `el.style.display = ''` (revert to the stylesheet value). Without
+        // this, `v-show`'s show step (`display: ''`) would be rejected by stylo
+        // ("Invalid property value") and the element would stay hidden.
+        if value.trim().is_empty() {
+            return self.remove_style_property(name, guard, url_extra_data);
+        }
         let context = ParserContext::new(
             Origin::Author,
             &url_extra_data,

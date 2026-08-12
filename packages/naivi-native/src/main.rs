@@ -40,6 +40,9 @@ impl EventSink for QuickJsEventSink {
             kind: event.kind.to_u8(),
             x: event.client_x as f64,
             y: event.client_y as f64,
+            key: event.key,
+            code: event.code,
+            value: event.value,
         });
     }
 }

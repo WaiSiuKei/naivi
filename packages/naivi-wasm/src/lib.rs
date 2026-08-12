@@ -21,7 +21,8 @@
 //!   receives that handler id and clears every binding on the node (the JS
 //!   side keeps its own handler → (node, kind) registry for bookkeeping, so
 //!   the id-only shape is sufficient for the mirror protocol).
-//! - `set_event_callback` receives `(nodeId, kind, x, y)` per drained event.
+//! - `set_event_callback` receives `(nodeId, kind, x, y, key, code, value)` per
+//!   drained event (key/code for keyboard events, the full value for `input`).
 
 #![cfg(target_arch = "wasm32")]
 
@@ -78,6 +79,9 @@ fn kind_to_u8(kind: NaiviEventKind) -> u8 {
         NaiviEventKind::MouseEnter => 6,
         NaiviEventKind::MouseLeave => 7,
         NaiviEventKind::DblClick => 8,
+        NaiviEventKind::KeyDown => 9,
+        NaiviEventKind::KeyUp => 10,
+        NaiviEventKind::Input => 11,
     }
 }
 
@@ -92,6 +96,9 @@ fn u8_to_kind(kind: u8) -> Option<NaiviEventKind> {
         6 => NaiviEventKind::MouseEnter,
         7 => NaiviEventKind::MouseLeave,
         8 => NaiviEventKind::DblClick,
+        9 => NaiviEventKind::KeyDown,
+        10 => NaiviEventKind::KeyUp,
+        11 => NaiviEventKind::Input,
         _ => return None,
     })
 }
@@ -112,6 +119,9 @@ impl EventSink for WasmEventSink {
             args.push(&JsValue::from(kind_to_u8(event.kind)));
             args.push(&JsValue::from_f64(event.client_x as f64));
             args.push(&JsValue::from_f64(event.client_y as f64));
+            args.push(&JsValue::from_str(&event.key));
+            args.push(&JsValue::from_str(&event.code));
+            args.push(&JsValue::from_str(&event.value));
             let _ = cb.apply(&JsValue::NULL, &args);
         });
     }
@@ -262,7 +272,8 @@ pub fn unbind_event(handler_id: u64) {
     });
 }
 
-/// Register the Rust→JS event callback: `(nodeId: number, kind: number, x: number, y: number) => void`.
+/// Register the Rust→JS event callback:
+/// `(nodeId, kind, x, y, key, code, value) => void`.
 #[wasm_bindgen]
 pub fn set_event_callback(cb: js_sys::Function) {
     EVENT_CALLBACK.with(|slot| *slot.borrow_mut() = Some(cb));

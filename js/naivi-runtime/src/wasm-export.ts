@@ -33,7 +33,9 @@ export interface WasmBindgenModule {
   remove_node?(nodeId: bigint): void;
   bind_event?(nodeId: bigint, kind: number): bigint | number;
   unbind_event?(handlerId: bigint): void;
-  set_event_callback?(cb: (nodeId: number, kind: number, x: number, y: number) => void): void;
+  set_event_callback?(
+    cb: (nodeId: number, kind: number, x: number, y: number, key?: string, code?: string, value?: string) => void,
+  ): void;
   tick?(): void;
   add_stylesheet?(css: string): void;
   set_placeholder_measures?(opsJson: string): boolean;

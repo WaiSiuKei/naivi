@@ -9,6 +9,7 @@
 import {
   type NodeMirror,
   isWasmReady,
+  setEventElementResolver,
 } from "./native-tree.js";
 import {
   createElement as nativeCreateElement,
@@ -103,6 +104,7 @@ export interface NaiveElement extends DOMNodeBase {
   classList: DOMTokenList;
   className: string;
   id: string;
+  value: string;
   innerHTML: string;
   _events: Record<string, EventListener[]>;
   _attrs: Record<string, string>;
@@ -269,6 +271,12 @@ function createNaiveElement(tag: string): NaiveElement {
     get id() { return this._attrs["id"] ?? ""; },
     set id(v: string) { this.setAttribute("id", v); },
 
+    // Value property (text inputs): the getter reflects the last engine-synced
+    // value; the setter routes through setAttribute → set_attr so the engine's
+    // text-input editor updates (e.g. Vue's `v-model` / clearing after submit).
+    get value() { return this._attrs["value"] ?? ""; },
+    set value(v: string) { this.setAttribute("value", String(v)); },
+
     style: null as unknown as CSSStyleDeclaration,
     classList: createClassListStub(),
 
@@ -426,6 +434,21 @@ function createNaiveElement(tag: string): NaiveElement {
   // Plan 066 U4: the style stub wires `_styleStore` on the element so the
   // pre-WASM upgrade path can forward stored inline styles (incl. visibility).
   el.style = createStyleStub(el);
+
+  // Register real (wasm-backed) elements by blitz node id so event dispatch
+  // can set `event.target` and sync the input value into the facade.
+  if (mirror.wasmId !== 0n) {
+    _elByWasmId.set(Number(mirror.wasmId), el);
+  }
+
+  // Text inputs: keep the facade `value` in sync with the engine's text
+  // editor even when no `v-model` / `input` listener is bound (the reference
+  // todomvc reads `event.target.value` on `keyup.enter`). The engine fires an
+  // `input` DOM event per keystroke; this internal listener routes it through
+  // the dispatcher, which syncs `_attrs.value` via the element resolver.
+  if (tag === "input") {
+    el.addEventListener("input", () => {});
+  }
   return el;
 }
 
@@ -625,6 +648,9 @@ export interface NaiveDocumentLike {
 
 let _globalDoc: NaiveDocumentLike | null = null;
 
+/** blitz node id (as `number`) → facade element, for event target resolution. */
+const _elByWasmId = new Map<number, NaiveElement>();
+
 function createNaiveDocument(): NaiveDocumentLike {
   const doc = {} as NaiveDocumentLike;
 
@@ -659,6 +685,18 @@ function createNaiveDocument(): NaiveDocumentLike {
 /** Install the naive document facade. Called at mount time in wasm mode. */
 export function initNaiveDocument(): void {
   _globalDoc = createNaiveDocument();
+
+  // Wire the event dispatcher's element resolver: set `event.target` on
+  // dispatched events and sync the engine's input value into the facade
+  // element's `_attrs.value` on `input` events (so `el.value` and
+  // `event.target.value` reflect the typed text).
+  setEventElementResolver((nodeId: number, value?: string) => {
+    const el = _elByWasmId.get(nodeId) ?? null;
+    if (el && value !== undefined) {
+      el._attrs.value = value;
+    }
+    return el;
+  });
 }
 
 /** Get the installed naive document (for internal use). */

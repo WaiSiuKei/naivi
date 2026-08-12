@@ -24,11 +24,14 @@ pub enum NaiviEventKind {
     MouseEnter,
     MouseLeave,
     DblClick,
+    KeyDown,
+    KeyUp,
+    Input,
 }
 
 impl NaiviEventKind {
     /// All event kinds the guest can bind.
-    pub const ALL: [NaiviEventKind; 9] = [
+    pub const ALL: [NaiviEventKind; 12] = [
         Self::Click,
         Self::PointerDown,
         Self::PointerUp,
@@ -38,6 +41,9 @@ impl NaiviEventKind {
         Self::MouseEnter,
         Self::MouseLeave,
         Self::DblClick,
+        Self::KeyDown,
+        Self::KeyUp,
+        Self::Input,
     ];
 
     /// The DOM event name (e.g. `"click"`), as used by the bridge protocol.
@@ -52,6 +58,9 @@ impl NaiviEventKind {
             Self::MouseEnter => "mouseenter",
             Self::MouseLeave => "mouseleave",
             Self::DblClick => "dblclick",
+            Self::KeyDown => "keydown",
+            Self::KeyUp => "keyup",
+            Self::Input => "input",
         }
     }
 
@@ -69,6 +78,9 @@ impl NaiviEventKind {
             DomEventData::MouseEnter(_) => Some(Self::MouseEnter),
             DomEventData::MouseLeave(_) => Some(Self::MouseLeave),
             DomEventData::DoubleClick(_) => Some(Self::DblClick),
+            DomEventData::KeyDown(_) => Some(Self::KeyDown),
+            DomEventData::KeyUp(_) => Some(Self::KeyUp),
+            DomEventData::Input(_) => Some(Self::Input),
             _ => None,
         }
     }
@@ -85,6 +97,9 @@ impl NaiviEventKind {
             DomEventKind::MouseEnter => Some(Self::MouseEnter),
             DomEventKind::MouseLeave => Some(Self::MouseLeave),
             DomEventKind::DoubleClick => Some(Self::DblClick),
+            DomEventKind::KeyDown => Some(Self::KeyDown),
+            DomEventKind::KeyUp => Some(Self::KeyUp),
+            DomEventKind::Input => Some(Self::Input),
             _ => None,
         }
     }
@@ -101,11 +116,14 @@ impl NaiviEventKind {
             Self::MouseEnter => DomEventKind::MouseEnter,
             Self::MouseLeave => DomEventKind::MouseLeave,
             Self::DblClick => DomEventKind::DoubleClick,
+            Self::KeyDown => DomEventKind::KeyDown,
+            Self::KeyUp => DomEventKind::KeyUp,
+            Self::Input => DomEventKind::Input,
         }
     }
 
     /// The protocol `u8` encoding (order shared with the guest `EVENT_KINDS`:
-    /// click=0 … dblclick=8). Both wasm and rquickjs channels serialize kinds
+    /// click=0 … input=11). Both wasm and rquickjs channels serialize kinds
     /// this way.
     pub const fn to_u8(self) -> u8 {
         match self {
@@ -118,6 +136,9 @@ impl NaiviEventKind {
             Self::MouseEnter => 6,
             Self::MouseLeave => 7,
             Self::DblClick => 8,
+            Self::KeyDown => 9,
+            Self::KeyUp => 10,
+            Self::Input => 11,
         }
     }
 
@@ -133,6 +154,9 @@ impl NaiviEventKind {
             6 => Self::MouseEnter,
             7 => Self::MouseLeave,
             8 => Self::DblClick,
+            9 => Self::KeyDown,
+            10 => Self::KeyUp,
+            11 => Self::Input,
             _ => return None,
         })
     }
@@ -152,13 +176,16 @@ impl std::str::FromStr for NaiviEventKind {
             "mouseenter" => Ok(Self::MouseEnter),
             "mouseleave" => Ok(Self::MouseLeave),
             "dblclick" => Ok(Self::DblClick),
+            "keydown" => Ok(Self::KeyDown),
+            "keyup" => Ok(Self::KeyUp),
+            "input" => Ok(Self::Input),
             _ => Err(()),
         }
     }
 }
 
 /// A single event queued for the naivi guest.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NaiviEvent {
     /// The node that carried the matching binding.
     pub node: NodeId,
@@ -168,6 +195,15 @@ pub struct NaiviEvent {
     /// carried them (0.0 otherwise).
     pub client_x: f32,
     pub client_y: f32,
+    /// The keyboard key (e.g. `"Enter"`, `"a"`) for key events; empty
+    /// otherwise.
+    pub key: String,
+    /// The physical keyboard code (e.g. `"Enter"`, `"KeyA"`) for key events;
+    /// empty otherwise.
+    pub code: String,
+    /// The full input value for `input` events (the engine's text-input
+    /// editor syncs it on every keystroke); empty otherwise.
+    pub value: String,
 }
 
 /// Receives events drained from [`NaiviDocument`](crate::document::NaiviDocument)'s queue.
@@ -209,6 +245,7 @@ impl EventHandler for NaiviEventHandler {
             return;
         };
         let (client_x, client_y) = client_coords(&event.data);
+        let (key, code, value) = event_payload(&event.data);
         let bindings = self.bindings.borrow();
         let Some(node) = chain
             .iter()
@@ -223,6 +260,9 @@ impl EventHandler for NaiviEventHandler {
             kind,
             client_x,
             client_y,
+            key,
+            code,
+            value,
         });
     }
 }
@@ -255,5 +295,17 @@ fn client_coords(data: &DomEventData) -> (f32, f32) {
         | DoubleClick(e) => (e.client_x(), e.client_y()),
         Wheel(e) => (e.client_x(), e.client_y()),
         _ => (0.0, 0.0),
+    }
+}
+
+/// Capture the keyboard/input payload (`(key, code, value)`) from a
+/// [`DomEventData`]. Non-keyboard events yield three empty strings.
+fn event_payload(data: &DomEventData) -> (String, String, String) {
+    match data {
+        DomEventData::KeyDown(e) | DomEventData::KeyUp(e) | DomEventData::KeyPress(e) => {
+            (e.key.to_string(), e.code.to_string(), String::new())
+        }
+        DomEventData::Input(e) => (String::new(), String::new(), e.value.clone()),
+        _ => (String::new(), String::new(), String::new()),
     }
 }

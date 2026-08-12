@@ -47,6 +47,19 @@ const _registry = new Map<number, NodeMirror>();
 const _listeners = new Map<number, Map<EventType, Set<EventCallback>>>();
 /** handler id (the node id) → binding entry, for removal bookkeeping. */
 const _handlerEntries = new Map<bigint, { node: NodeMirror; kind: EventType; cb: EventCallback }>();
+/**
+ * Optional node-id → element resolver (installed by the DOM facade). Used to
+ * set `event.target` on dispatched events and to sync the input value into
+ * the facade element when an `input` event arrives (so `el.value` reads the
+ * engine's current text).
+ */
+type ElementResolver = (nodeId: number, value?: string) => unknown | null;
+let _elementResolver: ElementResolver | null = null;
+
+/** Install (or clear) the node-id → element resolver used by event dispatch. */
+export function setEventElementResolver(fn: ElementResolver | null): void {
+  _elementResolver = fn;
+}
 
 // ── NodeMirror ──────────────────────────────────────────────────────
 
@@ -226,22 +239,37 @@ export function removeEventListener(handlerId: HandlerId): void {
 
 /**
  * Register the Rust→JS event callback. The host calls it as
- * `(nodeId, kind, x, y)`; we route it to the JS listener registry.
+ * `(nodeId, kind, x, y, key, code, value)`; we route it to the JS listener
+ * registry.
  */
 export function registerEventCallback(): void {
-  wasm().set_event_callback((nodeId, kind, x, y) => {
-    dispatchHostEvent(nodeId, kind, x, y);
+  wasm().set_event_callback((nodeId, kind, x, y, key, code, value) => {
+    dispatchHostEvent(nodeId, kind, x, y, key, code, value);
   });
 }
 
-/** Route a host-dispatched `(nodeId, kind, x, y)` event to registered listeners. */
-export function dispatchHostEvent(nodeId: number, kind: number, x: number, y: number): void {
+/**
+ * Route a host-dispatched `(nodeId, kind, x, y, key, code, value)` event to
+ * registered listeners. For `input` events the facade element's value is
+ * synced first (via the element resolver) so `el.value` / `event.target.value`
+ * reflect the engine's current text.
+ */
+export function dispatchHostEvent(
+  nodeId: number,
+  kind: number,
+  x: number,
+  y: number,
+  key?: string,
+  code?: string,
+  value?: string,
+): void {
   const type = kindToEventType(kind);
   const byKind = _listeners.get(nodeId);
   if (!byKind) return;
   const handlers = byKind.get(type);
   if (!handlers || handlers.size === 0) return;
-  const event = makeDomEvent(type, x, y);
+  const target = _elementResolver?.(nodeId, type === 'input' ? value : undefined) ?? null;
+  const event = makeDomEvent(type, x, y, key ?? '', code ?? '', value ?? '', target);
   for (const cb of [...handlers]) {
     try {
       cb(event);
@@ -251,13 +279,24 @@ export function dispatchHostEvent(nodeId: number, kind: number, x: number, y: nu
   }
 }
 
-function makeDomEvent(type: EventType, x: number, y: number): NaiveDomEvent {
+function makeDomEvent(
+  type: EventType,
+  x: number,
+  y: number,
+  key: string,
+  code: string,
+  value: string,
+  target: unknown,
+): NaiveDomEvent {
   return {
     type,
-    target: null,
-    currentTarget: null,
+    target,
+    currentTarget: target,
     clientX: x,
     clientY: y,
+    key,
+    code,
+    value,
     preventDefault() {},
     stopPropagation() {},
   };

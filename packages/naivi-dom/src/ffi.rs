@@ -12,8 +12,8 @@
 //! Mirrors the wasm channel: [`set_event_callback`] stores the guest callback
 //! as a `Persistent<Function>`; the guest tick calls [`drain_events`] inside
 //! `ctx.with`, restoring the callback and invoking it with
-//! `(nodeId, kind, x, y)`. The channel's [`EventSink`](crate::EventSink)
-//! implementation feeds [`queue_event`].
+//! `(nodeId, kind, x, y, key, code, value)`. The channel's
+//! [`EventSink`](crate::EventSink) implementation feeds [`queue_event`].
 
 use crate::{NaiviDocument, NaiviEventKind, NodeId};
 use rquickjs::{BigInt, Ctx, Function, Object, Persistent, Result, Value};
@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 /// A single event queued for the guest callback.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct QueuedEvent {
     /// The bound node's id (as `u64`; crosses to JS as a `f64` number).
     pub node: u64,
@@ -31,6 +31,12 @@ pub struct QueuedEvent {
     /// Client (viewport-relative) coordinates, when present.
     pub x: f64,
     pub y: f64,
+    /// Keyboard key (e.g. `"Enter"`) for key events; empty otherwise.
+    pub key: String,
+    /// Physical keyboard code for key events; empty otherwise.
+    pub code: String,
+    /// Full input value for `input` events; empty otherwise.
+    pub value: String,
 }
 
 thread_local! {
@@ -110,7 +116,15 @@ pub fn drain_events(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         }
     };
     for event in pending {
-        let args = (event.node as f64, event.kind, event.x, event.y);
+        let args = (
+            event.node as f64,
+            event.kind,
+            event.x,
+            event.y,
+            event.key,
+            event.code,
+            event.value,
+        );
         if let Err(error) = func.call::<_, Value>(args) {
             tracing::error!("ffi.drain_events: callback threw: {error:?}");
         }
