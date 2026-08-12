@@ -1,0 +1,31 @@
+{
+  "name": "@naivi/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vue Vapor runtime adapter for naive — bridges DOM-style API to WASM Renderer API",
+  "main": "./dist/native-tree.js",
+  "exports": {
+    ".": "./src/native-tree.ts",
+    "./components": "./src/components.ts",
+    "./vue-vapor": "./src/index-vue-vapor.ts",
+    "./naive-dom": "./src/naive-dom.ts",
+    "./wasm-types": "./src/wasm-types.ts",
+    "./placeholder-text": "./src/placeholder-text.ts",
+    "./desktop-main": "./src/desktop-main.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "vue": "^3.6.0-rc.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  }
+}

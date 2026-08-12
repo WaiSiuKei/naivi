@@ -1,0 +1,23 @@
+{
+  "name": "@naivi/compiler",
+  "version": "0.1.0",
+  "description": "AOT compiler for naive — Vue SFC to RenderTree IR + Style IR",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@vue/compiler-sfc": "^3.4.0",
+    "postcss": "^8.5.22",
+    "postcss-value-parser": "^4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.10"
+  }
+}

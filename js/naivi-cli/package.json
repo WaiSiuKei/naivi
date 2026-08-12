@@ -1,0 +1,40 @@
+{
+  "name": "@naivi/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI for naive — build and serve Vue Vapor apps",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/config.ts",
+      "default": "./src/config.ts"
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "naive": "./bin/naive.mjs"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vitejs/plugin-vue-jsx": "^5.1.6",
+    "@vue/compiler-sfc": "^3.6.0-rc.1",
+    "postcss": "^8.5.22",
+    "postcss-value-parser": "^4.2.0",
+    "sass": "^1.101.6",
+    "tsx": "^4.23.7",
+    "vite": "^8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.12.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}
