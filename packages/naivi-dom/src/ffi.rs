@@ -50,6 +50,15 @@ pub fn install_document(doc: Rc<RefCell<NaiviDocument>>) {
     DOC.with(|slot| *slot.borrow_mut() = Some(doc));
 }
 
+/// Drop the installed document reference. The host must call this once the
+/// event loop has exited: if the document outlives `main()`, the winit window
+/// it holds (via the shell provider) is dropped during TLS teardown, which
+/// panics on macOS — `objc2`'s autorelease-pool thread-local is already
+/// destroyed by then, so `winit_appkit::Window::drop` → `Pool::new` aborts.
+pub fn clear_document() {
+    DOC.with(|slot| *slot.borrow_mut() = None);
+}
+
 /// Run `f` against the installed document's ops core.
 fn with_core<R>(f: impl FnOnce(&mut crate::ops::OpsCore) -> R) -> R {
     DOC.with(|slot| {

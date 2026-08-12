@@ -176,4 +176,12 @@ fn main() {
     let mut app = BlitzApplication::<VelloHybridWindowRenderer>::new(proxy, rx);
     app.add_window(window);
     event_loop.run_app(app).unwrap();
+
+    // The FFI module keeps the document in a thread-local. If it outlives
+    // main(), the winit window (held via the shell provider) is dropped during
+    // TLS teardown, which panics on macOS: objc2's autorelease-pool thread-local
+    // is already destroyed, so `winit_appkit::Window::drop` → `Pool::new`
+    // aborts. Drop the reference here so the window goes away while the TLS is
+    // still alive (the remaining Rc drops when main's locals unwind).
+    ffi::clear_document();
 }
