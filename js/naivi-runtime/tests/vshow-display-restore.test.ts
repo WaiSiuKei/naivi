@@ -1,10 +1,10 @@
-//! v-show display restore forwarding (plan 066, U4).
+//! v-show display restore forwarding (plan 066, U4/U6).
 //!
-//! The style stub must forward `display` writes (including the empty-string
-//! clear), `removeProperty("display")` clears, and `visibility` writes to the
-//! engine; and must expose the inline store so the pre-WASM upgrade path can
-//! forward it. Forwarding goes through the batched FFI bridge (`styleId`
-//! ops flushed via `apply_ops` at the microtask boundary).
+//! The style stub forwards every inline style property to the engine via the
+//! direct protocol (`set_style`, kebab-case keys) — including the empty-string
+//! restore from v-show, `removeProperty("display")` clears, and `visibility`
+//! writes — and exposes the inline store so the pre-WASM upgrade path can
+//! forward it. Forwarding is synchronous (no apply_ops batch anymore).
 
 import { describe, expect, it, beforeEach } from 'vitest';
 
@@ -13,49 +13,40 @@ import { getNaiveDocument, initNaiveDocument } from '../src/naive-dom.js';
 import type { NaiveElement } from '../src/naive-dom.js';
 import type { WasmExports } from '../src/wasm-types.js';
 
-type Op = Record<string, unknown>;
+interface StyleCall {
+  key: string;
+  value: string;
+}
 
 function makeMockWasm(): {
   wasm: WasmExports;
-  ops: () => Op[];
+  styles: () => StyleCall[];
 } {
   let next = 1n;
-  let opsLog: Op[] = [];
+  const styles: StyleCall[] = [];
   const wasm: WasmExports = {
     create_element: () => next++,
-    set_style: () => {},
-    set_rule_table: () => true,
+    create_text_node: () => next++,
     set_text: () => {},
-    append_child: () => {},
-    remove_node: () => {},
-    apply_ops: (json) => {
-      opsLog = JSON.parse(json);
-      const mapping: Record<string, number> = {};
-      for (const op of opsLog) {
-        if (op.type === 'create') mapping[op.reference as string] = Number(next++);
-      }
-      return JSON.stringify(mapping);
+    set_attr: () => {},
+    set_style: (_n: bigint, key: string, value: string) => {
+      styles.push({ key, value });
     },
-    apply_conditional_styles: () => false,
+    append_child: () => {},
+    attach_document_root: () => {},
+    insert_before: () => {},
+    insert_after: () => {},
+    replace_node: () => {},
+    remove_node: () => {},
+    bind_event: () => 1n,
+    unbind_event: () => {},
+    set_event_callback: () => {},
+    tick: () => {},
+    add_stylesheet: () => {},
     set_placeholder_measures: () => false,
     clear_placeholder_measures: () => false,
-    get_layout_rect: () => 'null',
-    compute_layout: () => '{}',
-    add_event_listener: () => 0n,
-    remove_event_listener: () => {},
-    handle_event: () => {},
   };
-  return { wasm, ops: () => opsLog };
-}
-
-async function flushMicrotasks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-function styleOps(log: Op[]): Op[] {
-  return log.filter(
-    (op) => op.type === 'styleId' || op.type === 'style',
-  );
+  return { wasm, styles: () => styles };
 }
 
 describe('v-show display restore (plan 066)', () => {
@@ -63,87 +54,64 @@ describe('v-show display restore (plan 066)', () => {
     initNaiveDocument();
   });
 
-  async function setup(): Promise<{
+  function setup(): {
     mock: ReturnType<typeof makeMockWasm>;
     el: NaiveElement;
-  }> {
+  } {
     const mock = makeMockWasm();
     bindWasm(mock.wasm);
     initNaiveDocument();
     const doc = getNaiveDocument()!;
     const el = doc.createElement('div') as unknown as NaiveElement;
-    await flushMicrotasks();
-    mock.ops().length = 0; // clear bootstrap noise
     return { mock, el };
   }
 
-  it('forwards display writes incl. the empty-string restore (Covers AE4)', async () => {
-    const { mock, el } = await setup();
+  it('forwards display writes incl. the empty-string restore (Covers AE4)', () => {
+    const { mock, el } = setup();
 
     el.style.display = 'none';
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'display', value: 'none' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'display', value: 'none' });
 
     // v-show restore writes '' — must be forwarded (engine maps to Unset).
-    mock.ops().length = 0;
     el.style.display = '';
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'display', value: '' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'display', value: '' });
   });
 
-  it('forwards removeProperty("display") as a clear (Covers AE4)', async () => {
-    const { mock, el } = await setup();
+  it('forwards removeProperty("display") as a clear (Covers AE4)', () => {
+    const { mock, el } = setup();
 
     el.style.removeProperty('display');
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'display', value: '' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'display', value: '' });
   });
 
-  it('forwards visibility writes to the engine', async () => {
-    const { mock, el } = await setup();
+  it('forwards visibility writes to the engine', () => {
+    const { mock, el } = setup();
 
     el.style.visibility = 'hidden';
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'visibility', value: 'hidden' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'visibility', value: 'hidden' });
   });
 
-  it('forwards visibility empty-string and removeProperty clears', async () => {
-    const { mock, el } = await setup();
+  it('forwards visibility empty-string and removeProperty clears', () => {
+    const { mock, el } = setup();
 
     el.style.visibility = 'hidden';
     el.style.visibility = '';
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'visibility', value: '' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'visibility', value: '' });
 
-    mock.ops().length = 0;
     el.style.removeProperty('visibility');
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'visibility', value: '' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'visibility', value: '' });
   });
 
-  it('does not forward non-forwarded style properties', async () => {
-    const { mock, el } = await setup();
+  it('forwards arbitrary inline style properties with kebab-case keys', () => {
+    const { mock, el } = setup();
 
     el.style.color = 'red';
     el.style.fontSize = '16px';
-    await flushMicrotasks();
-    // Only display/visibility cross the FFI bridge (memory pressure guard).
-    expect(styleOps(mock.ops())).toHaveLength(0);
+    expect(mock.styles()).toContainEqual({ key: 'color', value: 'red' });
+    expect(mock.styles()).toContainEqual({ key: 'font-size', value: '16px' });
   });
 
-  it('forwards post-upgrade writes through the live mirror', async () => {
+  it('forwards post-upgrade writes through the live mirror', () => {
     // Adv5: the style stub must read `el._mirror` live at call time. Build an
     // element pre-WASM (mock mirror), bind WASM, then upgrade via appendChild
     // — a write after the upgrade must reach the engine through the swapped
@@ -158,19 +126,14 @@ describe('v-show display restore (plan 066)', () => {
     bindWasm(mock.wasm);
     const parent = doc.createElement('div') as unknown as NaiveElement;
     parent.appendChild(el); // triggers upgradeSubtreeToWasm(el)
-    await flushMicrotasks();
-    mock.ops().length = 0; // clear upgrade-time forwards
 
     // Post-upgrade write must be forwarded via the live (upgraded) mirror.
     el.style.visibility = 'hidden';
-    await flushMicrotasks();
-    expect(styleOps(mock.ops())).toContainEqual(
-      expect.objectContaining({ key: 'visibility', value: 'hidden' }),
-    );
+    expect(mock.styles()).toContainEqual({ key: 'visibility', value: 'hidden' });
   });
 
-  it('exposes the inline store for the pre-WASM upgrade path', async () => {
-    const { el } = await setup();
+  it('exposes the inline store for the pre-WASM upgrade path', () => {
+    const { el } = setup();
     el.style.display = 'none';
     expect(el._styleStore?.display).toBe('none');
   });

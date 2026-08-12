@@ -1,7 +1,8 @@
 // @naive/compiler — build-time optimizer for naive.
 //
-// Compiler does build-time IR generation. Class styles are produced by the
-// CLI's single-source styles.json pipeline, not by a Tailwind re-parser.
+// Compiler does build-time IR generation. CSS styles are produced by the
+// CLI's U6 AOT CSS pipeline (`naivi-cli` `compile.ts` → `styles.css` →
+// `__NAIVE_CSS` → stylo), not by the static IR or a Tailwind re-parser.
 
 export { parseSFC, getTemplateContent, getScriptContent, getSfcStyles, compileSfcStyles } from './sfc-parser.js';
 export { compileCSS, compileCSSFull } from './css-compiler.js';

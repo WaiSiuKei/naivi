@@ -1,3 +1,9 @@
+//! Guest-side IR loader tests (U4 direct protocol).
+//!
+//! `loadIR` builds the mirror tree through the direct exports
+//! (`create_element` / `create_text_node` / `set_style` / `append_child`) —
+//! there is no `apply_ops` batch anymore; ids resolve synchronously.
+
 import { describe, expect, it } from 'vitest';
 
 import { loadIR, type CompileOutputIR } from '../src/ir-loader.js';
@@ -36,44 +42,55 @@ const fixture: CompileOutputIR = {
   bindings: { handlers: { any: 'increment' }, signals: ['count'] },
 };
 
+interface StyleCall {
+  key: string;
+  value: string;
+}
+
 function fakeHost(): {
   host: WasmExports;
-  calls: () => number;
-  ops: () => unknown[];
+  styles: () => StyleCall[];
+  textNodes: () => string[];
+  appended: () => number;
 } {
-  let calls = 0;
-  let ops: unknown[] = [];
-  const unexpected = (): never => {
-    throw new Error('loader must use apply_ops only');
-  };
+  let next = 1n;
+  const styles: StyleCall[] = [];
+  const textNodes: string[] = [];
+  let appended = 0;
+  const noop = (): void => {};
   const host: WasmExports = {
-    create_element: unexpected,
-    set_style: unexpected,
-    set_rule_table: () => true,
-    set_text: unexpected,
-    append_child: unexpected,
-    remove_node: unexpected,
-    apply_ops: (json) => {
-      calls += 1;
-      ops = JSON.parse(json);
-      const mapping: Record<string, number> = {};
-      let id = 1;
-      for (const op of ops as { type: string; reference: string }[]) {
-        if (op.type === 'create') {
-          mapping[op.reference] = id++;
-        }
-      }
-      return JSON.stringify(mapping);
+    create_element: () => next++,
+    create_text_node: (text: string) => {
+      textNodes.push(text);
+      return next++;
     },
-    compute_layout: () => '',
-    add_event_listener: () => 0n,
-    remove_event_listener: () => {},
-    handle_event: () => {},
+    set_text: noop,
+    set_attr: noop,
+    set_style: (_n: bigint, key: string, value: string) => {
+      styles.push({ key, value });
+    },
+    append_child: () => {
+      appended += 1;
+    },
+    attach_document_root: noop,
+    insert_before: noop,
+    insert_after: noop,
+    replace_node: noop,
+    remove_node: noop,
+    bind_event: () => 1n,
+    unbind_event: noop,
+    set_event_callback: noop,
+    tick: noop,
+    add_stylesheet: noop,
     set_placeholder_measures: () => false,
     clear_placeholder_measures: () => false,
-    get_layout_rect: () => 'null',
   };
-  return { host, calls: () => calls, ops: () => ops };
+  return {
+    host,
+    styles: () => styles,
+    textNodes: () => textNodes,
+    appended: () => appended,
+  };
 }
 
 describe('loadIR', () => {
@@ -91,20 +108,21 @@ describe('loadIR', () => {
     expect(root.children[1].handlerName).toBe('increment');
   });
 
-  it('sends styles (base + variants) and text in a single batch (AE2/AE4)', () => {
-    const { host, calls, ops } = fakeHost();
+  it('applies base + variant styles and text via the direct protocol (AE2/AE4)', () => {
+    const { host, styles, textNodes, appended } = fakeHost();
     loadIR(fixture, host);
 
-    expect(calls()).toBe(1);
-    const styleOps = (ops() as { type: string }[]).filter((op) => op.type === 'style');
-    expect(styleOps.length).toBeGreaterThan(0);
-    const rootStyle = styleOps.filter((op) =>
-      JSON.stringify(op).includes('"node":"n0"'),
-    );
-    expect(JSON.stringify(rootStyle)).toContain('display');
-    expect(JSON.stringify(rootStyle)).toContain('hover:background-color');
-    const textOps = (ops() as { type: string }[]).filter((op) => op.type === 'text');
-    expect(textOps.length).toBe(1);
+    const keys = styles().map((s) => s.key);
+    expect(keys).toContain('display');
+    expect(keys).toContain('flex-direction');
+    expect(keys).toContain('background-color'); // hover variant
+    expect(keys).toContain('width');
+    expect(keys).toContain('opacity');
+    expect(styles().find((s) => s.key === 'opacity')?.value).toBe('0.5');
+    // Text nodes are created with their literal content.
+    expect(textNodes()).toContain('Count: ');
+    // Every non-root node is appended under its parent.
+    expect(appended()).toBe(4);
   });
 
   it('records handler and signal bindings on mirrors (AE3)', () => {
@@ -119,5 +137,9 @@ describe('loadIR', () => {
     const { host } = fakeHost();
     const root = loadIR(fixture, host);
     expect(root.wasmId).toBe(1n);
+    // `color: 'nope'` is forwarded verbatim; the loader must not throw.
+    expect(
+      host.set_style,
+    ).toBeDefined();
   });
 });

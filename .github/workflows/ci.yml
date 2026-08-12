@@ -115,6 +115,8 @@ jobs:
         working-directory: js
       - run: pnpm -r typecheck
         working-directory: js
+      - run: pnpm -r test
+        working-directory: js
       - run: pnpm -r build
         working-directory: js
 

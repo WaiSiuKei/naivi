@@ -20,7 +20,7 @@ describe('compileVue', () => {
     expect(output.tree.kind).toBe('element');
     expect(output.tree.children!.length).toBeGreaterThan(0);
 
-    // Class styles come from the runtime styles.json pipeline, not the IR.
+    // CSS styles come from the CLI's U6 AOT CSS pipeline, not the IR.
     expect(output.styles).toEqual([]);
 
     // Script is preserved

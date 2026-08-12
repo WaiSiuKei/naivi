@@ -1,5 +1,6 @@
-//! Class style removal: :class only syncs attributes; Rust owns compute
-//! (plan 062, U4).
+//! Class style removal: :class only syncs attributes; the engine owns style
+//! compute (plan 062, U4/U6). `setAttribute('class', …)` routes to
+//! `set_attr` — the facade never emits style ops derived from class tokens.
 
 import { describe, expect, it, beforeEach } from 'vitest';
 
@@ -7,41 +8,43 @@ import { bindWasm } from '../src/native-tree.js';
 import { getNaiveDocument, initNaiveDocument } from '../src/naive-dom.js';
 import type { WasmExports } from '../src/wasm-types.js';
 
-function makeMockWasm(): {
-  wasm: WasmExports;
-  ops: () => Array<Record<string, unknown>>;
-} {
-  let next = 1n;
-  let opsLog: Array<Record<string, unknown>> = [];
-  const wasm: WasmExports = {
-    create_element: () => next++,
-    set_style: () => {},
-    set_rule_table: () => true,
-    set_text: () => {},
-    append_child: () => {},
-    remove_node: () => {},
-    apply_ops: (json) => {
-      opsLog = JSON.parse(json);
-      const mapping: Record<string, number> = {};
-      for (const op of opsLog) {
-        if (op.type === 'create') mapping[op.reference as string] = Number(next++);
-      }
-      return JSON.stringify(mapping);
-    },
-    apply_conditional_styles: () => false,
-    set_placeholder_measures: () => false,
-    clear_placeholder_measures: () => false,
-    get_layout_rect: () => 'null',
-    compute_layout: () => '{}',
-    add_event_listener: () => 0n,
-    remove_event_listener: () => {},
-    handle_event: () => {},
-  };
-  return { wasm, ops: () => opsLog };
+interface Call {
+  kind: string;
+  name?: string;
+  value?: string;
 }
 
-async function flushMicrotasks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+function makeMockWasm(): {
+  wasm: WasmExports;
+  calls: () => Call[];
+} {
+  let next = 1n;
+  const calls: Call[] = [];
+  const wasm: WasmExports = {
+    create_element: () => next++,
+    create_text_node: () => next++,
+    set_text: () => {},
+    set_attr: (_n: bigint, name: string, value: string) => {
+      calls.push({ kind: 'set_attr', name, value });
+    },
+    set_style: (_n: bigint, key: string, value: string) => {
+      calls.push({ kind: 'set_style', name: key, value });
+    },
+    append_child: () => {},
+    attach_document_root: () => {},
+    insert_before: () => {},
+    insert_after: () => {},
+    replace_node: () => {},
+    remove_node: () => {},
+    bind_event: () => 1n,
+    unbind_event: () => {},
+    set_event_callback: () => {},
+    tick: () => {},
+    add_stylesheet: () => {},
+    set_placeholder_measures: () => false,
+    clear_placeholder_measures: () => false,
+  };
+  return { wasm, calls: () => calls };
 }
 
 describe('class style removal (plan 062)', () => {
@@ -49,26 +52,25 @@ describe('class style removal (plan 062)', () => {
     initNaiveDocument();
   });
 
-  it('syncs :class via setAttr and never emits style ops from classes', async () => {
+  it('syncs :class via set_attr and never emits style ops from classes', () => {
     const mock = makeMockWasm();
     bindWasm(mock.wasm);
     initNaiveDocument();
 
+    // Snapshot after the body bootstrap (its width/height UA styles emit
+    // set_style); only ops after this point matter.
+    const baseline = mock.calls().length;
     const doc = getNaiveDocument()!;
     const el = doc.createElement('div') as HTMLElement;
-    await flushMicrotasks();
-    mock.ops();
-
     el.setAttribute('class', 'btn text-red-500');
-    await flushMicrotasks();
 
-    const ops = mock.ops();
-    expect(
-      ops.some(
-        (op) =>
-          (op.type === 'setAttr' || op.type === 'setAttrId') && op.name === 'class',
-      ),
-    ).toBe(true);
-    expect(ops.some((op) => op.type === 'style')).toBe(false);
+    const classAttrs = mock
+      .calls()
+      .slice(baseline)
+      .filter((c) => c.kind === 'set_attr' && c.name === 'class');
+    expect(classAttrs).toHaveLength(1);
+    expect(classAttrs[0].value).toBe('btn text-red-500');
+    // No style ops derived from class tokens — stylo matches `.btn` etc.
+    expect(mock.calls().slice(baseline).some((c) => c.kind === 'set_style')).toBe(false);
   });
 });

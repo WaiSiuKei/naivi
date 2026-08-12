@@ -117,30 +117,6 @@ function naiveDevtoolsPlugin(cwd: string): Plugin {
 }
 
 /**
- * Rewrites the runtime's variable wasm import into a literal during naive
- * production builds, so rollup bundles the wasm module (and its .wasm
- * binary) into dist/assets with hashed names. Standalone Vite builds
- * (naive web) keep the variable + @vite-ignore form and never resolve the
- * absent file.
- *
- * U4: the wasm glue is no longer bundled by Vite — the trunk-built host
- * (`naivi-counter-wasm`) is loaded by trunk itself and published on
- * `window.wasmBindings` (+ `TrunkApplicationStarted`). The runtime's
- * `@vite-ignore`'d dynamic import stays unresolved at runtime.
- */
-function naiveWasmBundlePlugin(): Plugin {
-  return {
-    name: "naive-wasm-bundle",
-    apply: "build",
-    transform() {
-      // No rewrite in U4: the guest loads `window.wasmBindings`, so the
-      // variable import must remain a runtime dynamic import.
-      return null;
-    },
-  };
-}
-
-/**
  * Load the wasm/web page from `naive.config.ts` (plan 047 U2/U3, plan 049
  * U2): requires `pages`, selects the `index.html` page (KTD3), and returns
  * its declared vite config plus optional fixed size.
@@ -198,7 +174,6 @@ export async function resolveNaiveViteConfig(
   const naiveOnly: Plugin[] = [
     naiveStylesPlugin(options.onStylesChange),
     naivePolyfillPlugin(),
-    naiveWasmBundlePlugin(),
     ...(options.devtools ? [naiveDevtoolsPlugin(options.cwd)] : []),
   ];
 
@@ -261,33 +236,16 @@ export function jsToTsPlugin(): Plugin {
   };
 }
 
-/** Vite plugin: stub the runtime's Vite-virtual styles.json import. In the
- * desktop flow the host injects `globalThis.__NAIVE_STYLES`, so the module is
- * never read — but the bundler must resolve the import statically. The virtual
- * id intentionally has no `.json` extension so the JSON plugin does not try to
- * parse the stubbed JS content. */
-export const STYLES_ID = '\0naive-styles';
-export function stylesVirtualPlugin(): Plugin {
-  return {
-    name: 'naive-styles-virtual',
-    resolveId(source) {
-      if (source === '/node_modules/.naive/styles.json') return STYLES_ID;
-      return null;
-    },
-    load(id) {
-      if (id === STYLES_ID) return 'export default {};';
-      return null;
-    },
-  };
-}
-
 /**
- * Vite plugin: drop CSS from desktop bundles (plan 065, R5). Styles compile to
- * `styles.json` via the shared pipeline; the QuickJS guest has no `document`,
- * so Vite's default CSS inlining would crash eval. Must run `enforce: 'pre'`
- * ahead of the page's own plugins (Tailwind's is also pre-enforced) and map
- * `.css` specifiers to a virtual id that does NOT end in `.css` so vite:css
- * never parses the stub (verified against Vite 8.2.0).
+ * Vite plugin: drop CSS from desktop bundles (plan 065, R5). SFC `<style>`
+ * blocks and CSS imports would otherwise be inlined by Vite as style-tag JS;
+ * the QuickJS guest has no `document`, so that injection would crash eval.
+ * The U6 author CSS is delivered separately as text (`styles.css` →
+ * `globalThis.__NAIVE_CSS` → `add_stylesheet`), never via the page bundle.
+ * Must run `enforce: 'pre'` ahead of the page's own plugins (Tailwind's is
+ * also pre-enforced) and map `.css` specifiers to a virtual id that does NOT
+ * end in `.css` so vite:css never parses the stub (verified against Vite
+ * 8.2.0).
  */
 function naiveCssDropPlugin(): Plugin {
   const CSS_ID = '\0naive-css';
@@ -327,10 +285,10 @@ export interface ResolveDesktopViteConfigOptions {
  *
  * Reuses the page's `pages[].vite` config and plugins (Product KD1 — reverses
  * plan 047 KD1) plus the naive vue/vueJsx base (deduped by name), then adds
- * the desktop-only pieces: CSS drop, js→ts remap, styles virtual, desktop
- * defines, neutral-ish resolution, and IIFE single-file output at es2020.
- * The wasm-only naive plugins (wasm-mode polyfill, wasm import rewrite,
- * devtools, style watcher) are excluded (Product KD3).
+ * the desktop-only pieces: CSS drop, js→ts remap, desktop defines,
+ * neutral-ish resolution, and IIFE single-file output at es2020.
+ * The wasm-only naive plugins (wasm-mode polyfill, devtools, style watcher)
+ * are excluded (Product KD3).
  */
 export function resolveDesktopViteConfig(
   options: ResolveDesktopViteConfigOptions,
@@ -344,7 +302,7 @@ export function resolveDesktopViteConfig(
   // CSS drop must sit ahead of the page's plugins (it is pre-enforced and the
   // page's Tailwind is too — array position decides). The resolver plugins may
   // follow; they return null for non-matching ids.
-  merged.plugins = [naiveCssDropPlugin(), ...naiveBase, ...userPlugins, jsToTsPlugin(), stylesVirtualPlugin()];
+  merged.plugins = [naiveCssDropPlugin(), ...naiveBase, ...userPlugins, jsToTsPlugin()];
   merged.configFile = false;
   merged.define = {
     ...(userConfig.define ?? {}),

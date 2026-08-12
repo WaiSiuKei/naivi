@@ -11,8 +11,8 @@ export function compileVueToJSON(source: string): CompileOutput {
   const tree = compileTemplateIR(getTemplateContent(descriptor));
   const script = getScriptContent(descriptor);
 
-  // Class styles are produced by the single-source styles.json pipeline at
-  // runtime; the static IR carries no Tailwind-derived styles.
+  // CSS styles are produced by the CLI's U6 AOT CSS pipeline (compile.ts →
+  // styles.css → __NAIVE_CSS → stylo); the static IR carries no styles.
   const styles: StyleRecord[] = [];
   const bindings = analyzeBindings(tree, script);
   return { tree, styles, script, bindings };
