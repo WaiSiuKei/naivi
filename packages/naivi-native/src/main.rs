@@ -42,7 +42,8 @@ use naivi_guest_quickjs::main_ffi::{self, MainState};
 
 /// The native event sink: forwards drained naivi events into the QuickJS FFI
 /// queue, which the guest tick delivers to the JS callback as
-/// `(nodeId, kind, x, y)`.
+/// `(nodeId, kind, x, y, key, code, value, button, buttons, deltaX, deltaY,
+/// imeData, chain)` (KTD2/KTD3).
 struct QuickJsEventSink;
 
 impl EventSink for QuickJsEventSink {
@@ -55,6 +56,12 @@ impl EventSink for QuickJsEventSink {
             key: event.key,
             code: event.code,
             value: event.value,
+            chain: event.chain,
+            button: event.button,
+            buttons: event.buttons,
+            delta_x: event.delta_x,
+            delta_y: event.delta_y,
+            ime_data: event.ime_data,
         });
     }
 }

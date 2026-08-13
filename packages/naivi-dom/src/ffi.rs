@@ -14,12 +14,14 @@
 //! Mirrors the wasm channel: [`set_event_callback`] stores the guest callback
 //! as a `Persistent<Function>`; the guest tick calls [`drain_events`] inside
 //! `ctx.with`, restoring the callback and invoking it with
-//! `(nodeId, kind, x, y, key, code, value)` where `nodeId` is the JS-assigned
-//! **virtual id** (KTD2). The channel's [`EventSink`](crate::EventSink)
-//! implementation feeds [`queue_event`].
+//! `(nodeId, kind, x, y, key, code, value, button, buttons, deltaX, deltaY,
+//! imeData, chain)` where `nodeId` is the JS-assigned **virtual id** (KTD2)
+//! and `chain` is the ordered bound chain (KTD3). The channel's
+//! [`EventSink`](crate::EventSink) implementation feeds [`queue_event`].
 
 use crate::NaiviDocument;
-use rquickjs::{Ctx, Function, Object, Persistent, Result, TypedArray, Value};
+use rquickjs::function::Rest;
+use rquickjs::{Array, Ctx, Function, Object, Persistent, Result, TypedArray, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -40,6 +42,19 @@ pub struct QueuedEvent {
     pub code: String,
     /// Full input value for `input` events; empty otherwise.
     pub value: String,
+    /// The ordered bound chain (KTD3): target first, then ancestors. The JS
+    /// callback receives it as a trailing array argument and dispatches along
+    /// it so `stopPropagation` can truncate.
+    pub chain: Vec<u32>,
+    /// The mouse button that triggered the event (KTD2); `0` otherwise.
+    pub button: u16,
+    /// Bitmask of currently-pressed mouse buttons (KTD2); `0` otherwise.
+    pub buttons: u16,
+    /// Wheel delta (KTD2); `0.0` otherwise (scroll has no engine delta).
+    pub delta_x: f64,
+    pub delta_y: f64,
+    /// IME composition commit text (KTD2); empty otherwise.
+    pub ime_data: String,
 }
 
 thread_local! {
@@ -103,16 +118,29 @@ pub fn drain_events(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         }
     };
     for event in pending {
-        let args = (
-            event.node as f64,
-            event.kind,
-            event.x,
-            event.y,
-            event.key,
-            event.code,
-            event.value,
-        );
-        if let Err(error) = func.call::<_, Value>(args) {
+        // Args: (node, kind, x, y, key, code, value, button, buttons, deltaX,
+        // deltaY, imeData, chain). rquickjs `IntoArgs` only implements up to
+        // 7-tuples, so build a `Vec<Value>` and spread it via `Rest` (OQ3) —
+        // the JS callback keeps its positional shape.
+        let mut args: Vec<Value> = Vec::with_capacity(13);
+        args.push(Value::new_int(ctx.clone(), event.node as i32));
+        args.push(Value::new_int(ctx.clone(), event.kind as i32));
+        args.push(Value::new_float(ctx.clone(), event.x));
+        args.push(Value::new_float(ctx.clone(), event.y));
+        args.push(rquickjs::String::from_str(ctx.clone(), &event.key)?.into_value());
+        args.push(rquickjs::String::from_str(ctx.clone(), &event.code)?.into_value());
+        args.push(rquickjs::String::from_str(ctx.clone(), &event.value)?.into_value());
+        args.push(Value::new_int(ctx.clone(), event.button as i32));
+        args.push(Value::new_int(ctx.clone(), event.buttons as i32));
+        args.push(Value::new_float(ctx.clone(), event.delta_x));
+        args.push(Value::new_float(ctx.clone(), event.delta_y));
+        args.push(rquickjs::String::from_str(ctx.clone(), &event.ime_data)?.into_value());
+        let chain = Array::new(ctx.clone())?;
+        for (i, id) in event.chain.iter().enumerate() {
+            chain.set(i, *id)?;
+        }
+        args.push(chain.into_value());
+        if let Err(error) = func.call::<_, Value>((Rest(args),)) {
             tracing::error!("ffi.drain_events: callback threw: {error:?}");
         }
     }
