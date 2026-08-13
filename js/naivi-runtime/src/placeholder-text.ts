@@ -93,34 +93,18 @@ export interface PendingTextNode {
 }
 
 /**
- * Write placeholders for every pending text node, but only while fonts are
- * pending (R1 — placeholder is scoped to the loading window).
+ * Write placeholders for every pending text node (legacy plan 040 API).
  *
- * Returns the number of placeholders written. Calls the batch FFI once per
- * invocation, aligned with `apply_ops`' id-addressed ops (KTD2).
+ * U5 removed the placeholder-measure exports (`set_placeholder_measures` /
+ * `clear_placeholder_measures`): the host resolves fonts in Rust and no
+ * JS-side placeholder measurement happens anymore, so this is a no-op that
+ * returns 0 for back-compat.
  */
 export function writePlaceholdersForPending(
-  wasm: WasmExports,
-  textNodes: readonly PendingTextNode[],
+  _wasm: WasmExports,
+  _textNodes: readonly PendingTextNode[],
 ): number {
-  if (!fontsPending) {
-    return 0;
-  }
-  const ops: Array<{ node: number; width: number; lineHeight: number }> = [];
-  for (const node of textNodes) {
-    const text = node.text;
-    if (!text) {
-      continue;
-    }
-    const fontSize = node.fontSize ?? 16;
-    const { width, lineHeight } = measureText(text, fontSize, node.fontWeight ?? 400);
-    ops.push({ node: Number(node.wasmId), width, lineHeight });
-  }
-  if (ops.length === 0) {
-    return 0;
-  }
-  wasm.set_placeholder_measures(JSON.stringify(ops));
-  return ops.length;
+  return 0;
 }
 
 /**

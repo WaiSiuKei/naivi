@@ -1,11 +1,17 @@
 // Guest-side IR loader: walks a compiler `CompileOutput` into a mirror tree.
 //
-// U4: the old batched `apply_ops` round-trip is obsolete — node ids resolve
-// synchronously from `create_element` / `create_text_node`, so the loader
-// builds the tree directly through the direct protocol exports.
+// U5: creation goes through native-tree (virtual id + `CreateElement` /
+// `CreateTextNode` writer ops); styles route through `setProp`; topology is
+// wired with `insertNode`. Nothing touches the host synchronously — the
+// mount loop flushes the queued frame at the next tick.
 
-import { allocateMirrorId, registerMirror, type NodeMirror } from './native-tree.js';
-import type { WasmExports } from './wasm-types.js';
+import {
+  createElement as nativeCreateElement,
+  createTextNode as nativeCreateTextNode,
+  insertNode as nativeInsertNode,
+  type NodeMirror,
+} from './native-tree.js';
+import { setProp as nativeSetProp } from './batched-bridge.js';
 
 // Structural IR types (kept local to avoid a runtime -> compiler dependency).
 export interface IRNode {
@@ -44,59 +50,49 @@ export interface LoadedNode extends NodeMirror {
   signalName?: string;
 }
 
-/** Load a `CompileOutput` into the scene through the direct protocol exports. */
-export function loadIR(output: CompileOutputIR, host: WasmExports): LoadedNode {
+/** Load a `CompileOutput` into the scene through the U5 writer protocol. */
+export function loadIR(output: CompileOutputIR): LoadedNode {
   const build = (node: IRNode, parent: LoadedNode | null): LoadedNode => {
-    let wasmId: bigint;
-    if (node.kind === 'text') {
-      wasmId = host.create_text_node(node.text ?? '');
-    } else {
-      wasmId = host.create_element(node.tag ?? 'div');
-      const styleId = node.styleId;
-      if (styleId !== undefined) {
-        const record = output.styles.find((s) => s.id === styleId);
-        if (record) {
-          for (const [key, value] of Object.entries(record.properties.base)) {
-            host.set_style(wasmId, key, String(value));
-          }
-          // Variant styles (hover/active/focus) are the U6 styles path's
-          // concern; here they are applied as plain style props.
-          for (const variant of ['hover', 'active', 'focus'] as const) {
-            const props = record.properties[variant];
-            if (!props) continue;
-            for (const [key, value] of Object.entries(props)) {
-              host.set_style(wasmId, key, String(value));
-            }
+    const mirror =
+      node.kind === 'text'
+        ? nativeCreateTextNode(node.text ?? '')
+        : nativeCreateElement(node.tag ?? 'div');
+    const loaded = mirror as LoadedNode;
+
+    if (node.kind === 'element' && node.styleId !== undefined) {
+      const record = output.styles.find((s) => s.id === node.styleId);
+      if (record) {
+        for (const [key, value] of Object.entries(record.properties.base)) {
+          nativeSetProp(loaded, key, String(value));
+        }
+        // Variant styles (hover/active/focus) are the U6 styles path's
+        // concern; here they are applied as plain style props.
+        for (const variant of ['hover', 'active', 'focus'] as const) {
+          const props = record.properties[variant];
+          if (!props) continue;
+          for (const [key, value] of Object.entries(props)) {
+            nativeSetProp(loaded, key, String(value));
           }
         }
       }
+      loaded.styleId = node.styleId;
     }
-
-    const mirror: LoadedNode = {
-      id: allocateMirrorId(),
-      type: node.kind === 'element' ? 1 : 3,
-      parent,
-      children: [],
-      wasmId,
-      text: node.text,
-      styleId: node.styleId,
-    };
     if (node.handlerId) {
-      mirror.handlerName = node.handlerId;
+      loaded.handlerName = node.handlerId;
     }
     if (node.signalId) {
-      mirror.signalName = output.bindings.signals.includes(node.signalId)
+      loaded.signalName = output.bindings.signals.includes(node.signalId)
         ? node.signalId
         : undefined;
     }
-    registerMirror(mirror);
 
     if (parent) {
-      host.append_child(parent.wasmId, wasmId);
-      parent.children.push(mirror);
+      parent.children.push(loaded);
+      loaded.parent = parent;
+      nativeInsertNode(parent, loaded);
     }
-    mirror.children = (node.children ?? []).map((child) => build(child, mirror));
-    return mirror;
+    loaded.children = (node.children ?? []).map((child) => build(child, loaded));
+    return loaded;
   };
 
   return build(output.tree, null);

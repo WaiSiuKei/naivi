@@ -1,24 +1,25 @@
-// Guest Mirror Tree — JS-side node management for the naivi bridge (U4).
+// Guest Mirror Tree — JS-side node management for the naivi bridge (U5).
 //
 // Maintains a complete mirror of the blitz render tree with parent/child
-// bidirectional references. Each mutation is immediately synced to the host
-// via the injected WasmExports; the mirror avoids FFI round-trips for parent
-// lookups by keeping the full topology in JS memory.
+// bidirectional references. Each mutation is encoded as a protocol op into a
+// per-frame [`FrameWriter`]; the whole frame is flushed to the host once per
+// frame boundary (`flush_frame`) — no per-op FFI calls.
 //
-// Protocol (U4, KTD1): node ids are allocated by blitz and returned
-// synchronously (`create_element` / `create_text_node`), so no batching or
-// ref↔id mapping is needed. `setProp` routes attribute-ish props (`class`,
-// `id`) to `set_attr` and everything else to `set_style`. Events bind through
-// `bind_event` / `unbind_event`, and Rust-dispatched events arrive through
-// `set_event_callback` → [`dispatchHostEvent`], which fans them out to the
-// JS-side `(nodeId, kind)` listener registry.
+// Protocol (U5, KTD1/2): node ids are **JS-assigned virtual u32 ids**
+// (slot + generation + free-list + FinalizationRegistry). Rust maps
+// virtual → blitz id and reads `data-naivi-id` to reverse-map events. Events
+// arrive per-callback as `(nodeId, kind, x, y, key, code, value)` (KD2),
+// fanned out to the JS-side `(virtualId, eventType)` listener registry.
+// `frame_rejected(seq, reason)` triggers the self-heal path: clear the
+// writer, emit `reset`, rebuild the facade, re-mount (R15/F3).
 //
 // Usage:
-//   import { bindWasm, createElement, createTextNode, insertNode } from './native-tree.js';
+//   import { bindWasm, createElement, createTextNode, insertNode, tick } from './native-tree.js';
 //   bindWasm(wasmExports);
 //   const root = createElement('view');
 //   const text = createTextNode('Hello');
 //   insertNode(root, text);
+//   tick(); // frame boundary → flush
 
 // Re-export the desktop main-process API from the package root so the
 // Electron-style `import { app, NaiveWindow } from '@naive/runtime'` is
@@ -26,6 +27,8 @@
 // plan 045, KTD7).
 export { app, NaiveWindow } from './desktop-main.js';
 
+import { FrameWriter } from '@naivi/protocol/writer';
+import { EVENT_KINDS, eventTypeToKind, kindToEventType } from '@naivi/protocol';
 import type {
   WasmExports,
   HandlerId,
@@ -33,7 +36,6 @@ import type {
   EventCallback,
   NaiveDomEvent,
 } from './wasm-types.js';
-import { kindToEventType } from './wasm-types.js';
 
 // Re-export the guest→core contract so consumers can type the bound exports.
 export type { WasmExports, HandlerId, EventType, EventCallback, NaiveDomEvent } from './wasm-types.js';
@@ -92,12 +94,12 @@ if (debugLogEndpoint !== null) {
 // ── Global state ────────────────────────────────────────────────────
 
 let _wasm: WasmExports | null = null;
-let _nextId = 1;
+let _writer = new FrameWriter();
 const _registry = new Map<number, NodeMirror>();
-/** blitz node id (as `number`) → eventType → set of guest callbacks. */
+/** virtual node id → eventType → set of guest callbacks. */
 const _listeners = new Map<number, Map<EventType, Set<EventCallback>>>();
-/** handler id (the node id) → binding entry, for removal bookkeeping. */
-const _handlerEntries = new Map<bigint, { node: NodeMirror; kind: EventType; cb: EventCallback }>();
+/** handler id (the node's virtual id) → binding entry, for removal bookkeeping. */
+const _handlerEntries = new Map<number, { node: NodeMirror; kind: EventType; cb: EventCallback }>();
 /**
  * Optional node-id → element resolver (installed by the DOM facade). Used to
  * set `event.target` on dispatched events and to sync the input value into
@@ -115,14 +117,60 @@ export function setEventElementResolver(fn: ElementResolver | null): void {
   _elementResolver = fn;
 }
 
+// ── Virtual id allocation (U5, KTD2) ───────────────────────────────
+//
+// u32 id = (generation << 20) | slot. The generation counter makes freed ids
+// stale before reuse (a late op referencing a freed id is rejected by Rust
+// instead of aliasing a new node). Reclamation is explicit on `removeNode`
+// plus GC-driven via `FinalizationRegistry` when a leaked mirror is collected.
+
+const SLOT_BITS = 20;
+const SLOT_MASK = (1 << SLOT_BITS) - 1;
+const FREE_LIST: number[] = [];
+const GENERATIONS: number[] = [];
+let nextSlot = 1; // slot 0 / id 0 is never a node
+
+const finalization = new FinalizationRegistry<number>((id) => {
+  // Only reclaim if the slot's generation still matches (id not re-issued).
+  const slot = id & SLOT_MASK;
+  if (GENERATIONS[slot] === ((id >>> SLOT_BITS) & 0xfff)) {
+    nodesBySlot[slot] = undefined;
+    GENERATIONS[slot] = (GENERATIONS[slot] + 1) & 0xfff;
+    FREE_LIST.push(slot);
+  }
+});
+
+const nodesBySlot: (NodeMirror | undefined)[] = [];
+
+function newId(): number {
+  let slot: number;
+  if (FREE_LIST.length > 0) {
+    slot = FREE_LIST.pop()!;
+  } else {
+    slot = nextSlot++;
+    GENERATIONS[slot] = 0;
+  }
+  const gen = GENERATIONS[slot];
+  return ((gen << SLOT_BITS) | slot) >>> 0;
+}
+
+function freeId(id: number): void {
+  const slot = id & SLOT_MASK;
+  if (GENERATIONS[slot] === ((id >>> SLOT_BITS) & 0xfff)) {
+    nodesBySlot[slot] = undefined;
+    GENERATIONS[slot] = (GENERATIONS[slot] + 1) & 0xfff;
+    FREE_LIST.push(slot);
+  }
+}
+
 // ── NodeMirror ──────────────────────────────────────────────────────
 
 export interface NodeMirror {
+  /** JS-assigned virtual u32 id (the wire node identity). */
   readonly id: number;
-  readonly type: number;   // 1 = Element, 3 = Text
+  readonly type: number; // 1 = Element, 3 = Text
   parent: NodeMirror | null;
   children: NodeMirror[];
-  wasmId: bigint;
   text?: string;
 }
 
@@ -148,34 +196,81 @@ export function getWasm(): WasmExports {
   return wasm();
 }
 
+// ── Frame flush / tick ──────────────────────────────────────────────
+
+const rafQueue: Array<(now: number) => void> = [];
+
+/** Queue a callback to run at the next frame boundary (rAF shim). */
+export function requestFrameFlush(cb: (now: number) => void): void {
+  rafQueue.push(cb);
+}
+
+/**
+ * Frame tick: run the rAF queue, then flush the accumulated ops as one frame.
+ * Called by the browser rAF loop (wasm) or by the host's `__tick()` (native).
+ */
+export function tick(now: number = 0): void {
+  const q = rafQueue.splice(0);
+  for (const cb of q) {
+    try {
+      cb(now);
+    } catch (e) {
+      console.error('[naivi] frame callback threw:', e);
+    }
+  }
+  flushFrame();
+}
+
+/** Flush the pending ops to the host as one frame (no-op when empty). */
+export function flushFrame(): void {
+  if (_writer.opCount === 0) return;
+  const bytes = _writer.flush();
+  if (bytes.byteLength === 0) return;
+  wasm().flush_frame(bytes);
+}
+
+/** Number of ops currently queued in the writer (test seam). */
+export function queuedOpCount(): number {
+  return _writer.opCount;
+}
+
+/** Discard the writer's queued ops without flushing (test isolation). */
+export function clearQueuedOps(): void {
+  _writer.clear();
+}
+
 // ── Tree operations ─────────────────────────────────────────────────
 
-/** Create an element node; the id is allocated by blitz and returned synchronously. */
+/** Create an element node with a fresh JS-assigned virtual id. */
 export function createElement(tag: string): NodeMirror {
-  const w = wasm();
+  const id = newId();
+  _writer.createElement(tag);
   const node: NodeMirror = {
-    id: _nextId++,
+    id,
     type: 1, // Element
     parent: null,
     children: [],
-    wasmId: w.create_element(tag),
   };
-  _registry.set(node.id, node);
+  _registry.set(id, node);
+  nodesBySlot[id & SLOT_MASK] = node;
+  finalization.register(node, id);
   return node;
 }
 
 /** Create a text node with initial content. */
 export function createTextNode(text: string): NodeMirror {
-  const w = wasm();
+  const id = newId();
+  _writer.createTextNode(text);
   const node: NodeMirror = {
-    id: _nextId++,
+    id,
     type: 3, // Text
     parent: null,
     children: [],
-    wasmId: w.create_text_node(text),
     text,
   };
-  _registry.set(node.id, node);
+  _registry.set(id, node);
+  nodesBySlot[id & SLOT_MASK] = node;
+  finalization.register(node, id);
   return node;
 }
 
@@ -196,30 +291,29 @@ export function insertNode(parent: NodeMirror, child: NodeMirror): void {
   const siblings = parent.children;
   const idx = siblings.indexOf(child);
   const next = siblings[idx + 1];
-  const w = wasm();
   if (next !== undefined) {
-    w.insert_before(next.wasmId, child.wasmId);
+    _writer.insertBefore(next.id, child.id);
   } else {
-    w.append_child(parent.wasmId, child.wasmId);
+    _writer.appendChild(parent.id, child.id);
   }
 }
 
 /** Attach a node as a child of the document root (the facade `body`). */
 export function attachDocumentRoot(node: NodeMirror): void {
-  wasm().attach_document_root(node.wasmId);
+  _writer.attachRoot(node.id);
 }
 
-/** Remove a node from both mirror and Core (recursively removes children). */
+/** Remove a node from both mirror and the host frame (recursively). */
 export function removeNode(node: NodeMirror): void {
   for (const child of [...node.children]) {
     removeNode(child);
   }
   removeFromParent(node);
-  const w = wasm();
-  w.remove_node(node.wasmId);
-  // Drop JS-side listener entries + host bindings for the removed subtree root.
-  unbindAll(node.wasmId);
+  _writer.removeNode(node.id);
+  unbindAll(node.id);
   _registry.delete(node.id);
+  finalization.unregister(node);
+  freeId(node.id);
 }
 
 /** Attribute-ish props route to `set_attr`; everything else is a style prop. */
@@ -227,43 +321,64 @@ const ATTR_PROPS = new Set(['class', 'id']);
 
 /** Set a property, routing attribute-ish props (`class`, `id`) to `set_attr` and style props to `set_style`. */
 export function setProp(node: NodeMirror, key: string, value: string): void {
-  const w = wasm();
   if (ATTR_PROPS.has(key)) {
-    w.set_attr(node.wasmId, key, value);
+    _writer.setAttr(node.id, key, value);
   } else {
-    w.set_style(node.wasmId, key, value);
+    _writer.setStyle(node.id, key, value);
   }
 }
 
 /** Set an element attribute (e.g. `class`, `id`, `data-*`). */
 export function setAttr(node: NodeMirror, name: string, value: string): void {
-  wasm().set_attr(node.wasmId, name, value);
+  _writer.setAttr(node.id, name, value);
 }
 
 /** Sync a `:checked` state through the `checked` attribute (stylo matching). */
 export function setChecked(node: NodeMirror, checked: boolean): void {
-  wasm().set_attr(node.wasmId, 'checked', checked ? 'true' : 'false');
+  _writer.setAttr(node.id, 'checked', checked ? 'true' : 'false');
 }
 
 /** Set text content on a text node. */
 export function setText(node: NodeMirror, text: string): void {
   node.text = text;
-  wasm().set_text(node.wasmId, text);
+  _writer.setText(node.id, text);
 }
 
-// ── Event binding (U4: bind_event / unbind_event + set_event_callback) ──
+/** Inject an author stylesheet via the frame `add_stylesheet` op. */
+export function addStylesheet(css: string): void {
+  _writer.addStylesheet(css);
+}
 
 /**
- * Register an event listener on a node. Returns the blitz node id as the
- * handler id (the U4 protocol's `bind_event` return), for later removal.
+ * Emit the `reset` op and reset every JS-side structure (self-heal, R15/F3):
+ * the host drops its whole tree + virtual-id map on `reset`, so the guest must
+ * too — registry, listener tables, and slot→node backings are cleared and the
+ * allocator restarts (any stale mirror held by a doomed facade can never be
+ * mistaken for a live node again).
+ */
+export function emitReset(): void {
+  _writer.reset();
+  _registry.clear();
+  _listeners.clear();
+  _handlerEntries.clear();
+  nodesBySlot.length = 0;
+  FREE_LIST.length = 0;
+  GENERATIONS.length = 0;
+  nextSlot = 1;
+}
+
+// ── Event binding (U5: bind/unbind as frame ops; per-event callback) ──
+
+/**
+ * Register an event listener on a node. Returns the node's virtual id as the
+ * handler id, for later removal.
  */
 export function addEventListener(
   node: NodeMirror,
   eventType: EventType,
   callback: EventCallback,
 ): HandlerId {
-  const w = wasm();
-  const nodeId = Number(node.wasmId);
+  const nodeId = node.id;
   let byKind = _listeners.get(nodeId);
   if (!byKind) {
     byKind = new Map();
@@ -281,30 +396,46 @@ export function addEventListener(
   if (SYNTHESIZED_EVENT_TYPES.has(eventType)) {
     return 0n;
   }
-  const handlerId = w.bind_event(node.wasmId, eventType);
-  _handlerEntries.set(handlerId, { node, kind: eventType, cb: callback });
-  return handlerId;
+  _writer.bindEvent(node.id, eventTypeToKind(eventType));
+  _handlerEntries.set(nodeId, { node, kind: eventType, cb: callback });
+  return BigInt(nodeId);
 }
 
 /** Remove a previously registered event listener (by its handler id). */
 export function removeEventListener(handlerId: HandlerId): void {
-  wasm().unbind_event(handlerId);
-  const entry = _handlerEntries.get(handlerId);
+  const nodeId = Number(handlerId);
+  _writer.unbindEvent(nodeId);
+  const entry = _handlerEntries.get(nodeId);
   if (entry) {
-    const byKind = _listeners.get(Number(entry.node.wasmId));
+    const byKind = _listeners.get(nodeId);
     byKind?.get(entry.kind)?.delete(entry.cb);
-    _handlerEntries.delete(handlerId);
+    _handlerEntries.delete(nodeId);
   }
 }
 
 /**
  * Register the Rust→JS event callback. The host calls it as
- * `(nodeId, kind, x, y, key, code, value)`; we route it to the JS listener
- * registry.
+ * `(nodeId, kind, x, y, key, code, value)` (per-event, not framed — KD2); we
+ * route it to the JS listener registry keyed by virtual id.
  */
 export function registerEventCallback(): void {
   wasm().set_event_callback((nodeId, kind, x, y, key, code, value) => {
     dispatchHostEvent(nodeId, kind, x, y, key, code, value);
+  });
+}
+
+/**
+ * Self-heal wiring (R15/F3): on `frame_rejected(seq, reason)` the runtime
+ * clears the writer, emits `reset`, then runs the installed recovery handler
+ * (rebuilt facade + full re-mount) so the JS/Rust sides resync.
+ */
+export function registerFrameRejectedHandler(recover: () => void): void {
+  wasm().set_frame_rejected_callback((seq, reason) => {
+    console.warn(`[naivi] frame ${seq} rejected (reason ${reason}) — self-healing`);
+    _writer.clear();
+    emitReset();
+    flushFrame();
+    recover();
   });
 }
 
@@ -391,19 +522,15 @@ function makeDomEvent(
   };
 }
 
-/** Drop every JS-side listener entry + host binding for a node id. */
-function unbindAll(nodeId: bigint): void {
-  _listeners.delete(Number(nodeId));
+/** Drop every JS-side listener entry + host binding for a node's virtual id. */
+function unbindAll(nodeId: number): void {
+  _listeners.delete(nodeId);
   for (const [handlerId, entry] of _handlerEntries) {
-    if (entry.node.wasmId === nodeId) {
+    if (entry.node.id === nodeId) {
       _handlerEntries.delete(handlerId);
     }
   }
-  try {
-    wasm().unbind_event(nodeId);
-  } catch {
-    /* node already gone — nothing to unbind */
-  }
+  _writer.unbindEvent(nodeId);
 }
 
 // ── Layout & render ─────────────────────────────────────────────────
@@ -442,9 +569,9 @@ export interface MirrorRect {
   height: number;
 }
 
-/** Allocate a unique mirror id (used by bulk loaders). */
+/** Allocate a unique virtual id (used by bulk loaders). */
 export function allocateMirrorId(): number {
-  return _nextId++;
+  return newId();
 }
 
 /** Register a mirror node built outside the standard helpers. */
@@ -459,16 +586,16 @@ export function unregisterMirror(node: NodeMirror): void {
 
 /**
  * Collect every text node in the mirror tree (placeholder measurement /
- * diagnostics). Returns the nodes with their resolved wasm ids.
+ * diagnostics). Returns the nodes with their virtual ids.
  */
 export function collectTextNodes(): Array<{
-  wasmId: bigint;
+  id: number;
   text?: string;
 }> {
-  const nodes: Array<{ wasmId: bigint; text?: string }> = [];
+  const nodes: Array<{ id: number; text?: string }> = [];
   for (const node of _registry.values()) {
     if (node.type === 3 && node.text !== undefined) {
-      nodes.push({ wasmId: node.wasmId, text: node.text });
+      nodes.push({ id: node.id, text: node.text });
     }
   }
   return nodes;

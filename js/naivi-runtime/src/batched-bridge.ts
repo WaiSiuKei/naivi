@@ -1,12 +1,12 @@
-// Direct FFI bridge for the Vue DOM facade (U4, KTD1).
+// Facade-facing bridge for the U5 frame protocol (KD2/KD3/KD8).
 //
-// The U4 wasm protocol returns node ids synchronously (`create_element` /
-// `create_text_node`), so batching into an `apply_ops` round-trip is obsolete:
-// every facade mutation routes straight to the direct exports via
-// native-tree. This module keeps the facade-facing surface
-// (`createElement` / `insertNode` / `setProp` / … / `isBatchPending` /
-// `flush`) so `naive-dom.ts`, the mount path, and the desktop entry stay
-// unchanged. Nothing here is ever "batch pending".
+// Every facade mutation routes through native-tree, which allocates a JS
+// virtual id and queues an op into the [`FrameWriter`]. Mutations never touch
+// the host synchronously: the mount loop drives `tick()`/`flushFrame()` at
+// each frame boundary, and the writer flushes one binary frame per `flush()`.
+// This module keeps the facade-facing surface (`createElement` / `insertNode`
+// / `setProp` / … / `isBatchPending` / `flush`) so `naive-dom.ts`, the mount
+// path, and the desktop entry stay unchanged.
 
 import {
   createElement as nativeCreateElement,
@@ -20,18 +20,21 @@ import {
   setText as nativeSetText,
   addEventListener as nativeAddEventListener,
   removeEventListener as nativeRemoveEventListener,
+  addStylesheet as nativeAddStylesheet,
+  flushFrame as nativeFlushFrame,
+  queuedOpCount as nativeQueuedOpCount,
   type NodeMirror,
 } from "./native-tree.js";
 import type { EventCallback } from "./wasm-types.js";
 
 export { getBoundingClientRect } from "./native-tree.js";
 
-/** Create a WASM-backed element mirror (id resolves synchronously). */
+/** Create a writer-backed element mirror (virtual id resolves synchronously). */
 export function createElement(tag: string): NodeMirror {
   return nativeCreateElement(tag);
 }
 
-/** Create a WASM-backed text mirror. */
+/** Create a writer-backed text mirror. */
 export function createTextNode(text: string): NodeMirror {
   return nativeCreateTextNode(text);
 }
@@ -71,7 +74,12 @@ export function setChecked(mirror: NodeMirror, checked: boolean): void {
   nativeSetChecked(mirror, checked);
 }
 
-/** True when a mirror is awaiting batch flush — never in the U4 direct protocol. */
+/** Queue an author stylesheet as an `AddStylesheet` frame op. */
+export function addStylesheet(css: string): void {
+  nativeAddStylesheet(css);
+}
+
+/** True when a mirror awaits batch flush — never in the U5 frame protocol. */
 export function isBatchPending(_mirror: NodeMirror): boolean {
   return false;
 }
@@ -94,12 +102,12 @@ export function removeEventListener(token: bigint): void {
   nativeRemoveEventListener(token);
 }
 
-/** No-op in the U4 direct protocol (no apply_ops batch to flush). */
+/** Flush the queued ops to the host as one binary frame (no-op when empty). */
 export function flush(): void {
-  /* nothing to flush — every op already reached the host synchronously */
+  nativeFlushFrame();
 }
 
-/** Test seam: number of queued ops — always 0 in the direct protocol. */
+/** Test seam: number of queued ops in the writer. */
 export function queuedOpCount(): number {
-  return 0;
+  return nativeQueuedOpCount();
 }

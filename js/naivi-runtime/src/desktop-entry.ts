@@ -7,7 +7,13 @@
 // No document, canvas, or requestAnimationFrame — the native window owns the
 // canvas.
 
-import { bindWasm, registerEventCallback, type WasmExports } from "./native-tree.js";
+import {
+  bindWasm,
+  registerEventCallback,
+  registerFrameRejectedHandler,
+  tick,
+  type WasmExports,
+} from "./native-tree.js";
 import { installFontsPendingHook } from "./placeholder-text.js";
 import { naiveRootStyle } from "./page-size.js";
 
@@ -37,6 +43,30 @@ export async function mount(component: any, _opts: MountOptions = {}): Promise<v
   }
 }
 
+// Frame-rejection self-heal guard (R15/F3): bound rebuild + re-mount attempts.
+const MAX_HEAL_ATTEMPTS = 5;
+let _healAttempts = 0;
+
+/**
+ * Rebuild the facade and re-mount after a `frame_rejected(seq, reason)`
+ * (see index-vue-vapor.ts `recoverMount` for the rationale).
+ */
+async function recoverMount(component: any): Promise<void> {
+  _healAttempts++;
+  if (_healAttempts > MAX_HEAL_ATTEMPTS) {
+    console.error(
+      `[naivi] frame-rejection self-heal exceeded ${MAX_HEAL_ATTEMPTS} attempts — giving up`,
+    );
+    return;
+  }
+  console.warn(
+    `[naivi] self-heal attempt ${_healAttempts}/${MAX_HEAL_ATTEMPTS}: rebuilding facade + re-mounting`,
+  );
+  const { initNaiveDocument } = await import("./naive-dom.js");
+  initNaiveDocument();
+  await mount(component);
+}
+
 async function mountInner(component: any): Promise<void> {
   const stage = (s: string) => {
     (globalThis as unknown as Record<string, unknown>).__naiveMountStage = s;
@@ -49,11 +79,14 @@ async function mountInner(component: any): Promise<void> {
   // registry installed by the DOM facade (U5 set_event_callback).
   registerEventCallback();
 
-  // Font-state hook parity: clear placeholders on the trailing edge so they
-  // never stay stuck (native fonts resolve in Rust, KTD6).
-  installFontsPendingHook(() => {
-    ffi.clear_placeholder_measures();
+  // Self-heal wiring (R15/F3): on `frame_rejected` rebuild + re-mount.
+  registerFrameRejectedHandler(() => {
+    void recoverMount(component);
   });
+
+  // Legacy placeholder-measure hook (plan 040): the native host resolves
+  // fonts in Rust; the trailing-edge clear is a no-op.
+  installFontsPendingHook(() => {});
 
   const { getNaiveDocument, loadCSSClassStyles, initNaiveDocument } = await import("./naive-dom.js");
   stage("naive-dom-imported");
@@ -99,7 +132,6 @@ async function mountInner(component: any): Promise<void> {
   stage("app-created");
   app.mount(naiveRoot);
   stage("mounted");
-  stage("mounted");
 
   // Make the Vue-mounted child fill the naiveRoot container. Append to any
   // existing inline style (a `:style` binding on the root) rather than
@@ -112,6 +144,12 @@ async function mountInner(component: any): Promise<void> {
       prevStyle ? `${prevStyle};width:100%;height:100%` : "width:100%;height:100%",
     );
   }
+
+  // Frame contract (U8): the native host calls `globalThis.__tick()` once per
+  // frame — pump jobs, then flush the queued ops as one binary frame.
+  (globalThis as unknown as Record<string, unknown>).__tick = () => {
+    tick();
+  };
 
   (globalThis as unknown as Record<string, unknown>).__naiveRoot = naiveRoot;
 }

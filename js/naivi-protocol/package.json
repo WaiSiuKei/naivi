@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Single Source of Truth for the naivi bridge protocol — event kinds / wire tables, consumed by the JS runtime (import) and by naivi-dom's build.rs (naive literal-table parse)",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./writer": "./src/writer.ts"
   },
   "scripts": {
     "build": "tsc",

@@ -14,52 +14,7 @@ import {
   getNaiveDocument,
   initNaiveDocument,
 } from '../src/naive-dom.js';
-import type { WasmExports } from '../src/wasm-types.js';
-
-type EventCb = (
-  nodeId: number,
-  kind: number,
-  x: number,
-  y: number,
-  key?: string,
-  code?: string,
-  value?: string,
-) => void;
-
-function makeMockWasm(): {
-  wasm: WasmExports;
-  fireEvent: (nodeId: bigint, kind: number, value?: string) => void;
-} {
-  let next = 1n;
-  let eventCb: EventCb | null = null;
-  const wasm: WasmExports = {
-    create_element: () => next++,
-    create_text_node: () => next++,
-    set_text: () => {},
-    set_attr: () => {},
-    set_style: () => {},
-    append_child: () => {},
-    attach_document_root: () => {},
-    insert_before: () => {},
-    insert_after: () => {},
-    replace_node: () => {},
-    remove_node: () => {},
-    bind_event: () => 1n,
-    unbind_event: () => {},
-    set_event_callback: (cb) => {
-      eventCb = cb as EventCb;
-    },
-    tick: () => {},
-    add_stylesheet: () => {},
-    set_placeholder_measures: () => false,
-    clear_placeholder_measures: () => false,
-  };
-  return {
-    wasm,
-    fireEvent: (nodeId, kind, value) =>
-      eventCb?.(Number(nodeId), kind, 0, 0, '', '', value),
-  };
-}
+import { makeMockWasm } from './helpers/frame-harness.js';
 
 describe('checkbox change translation', () => {
   beforeEach(() => {
@@ -77,12 +32,12 @@ describe('checkbox change translation', () => {
 
     const doc = getNaiveDocument()!;
     const cb = doc.createElement('input') as {
-      _mirror: { wasmId: bigint };
+      _mirror: { id: number };
       setAttribute(name: string, value: string): void;
       addEventListener(type: string, handler: (e: unknown) => void): void;
     };
     cb.setAttribute('type', 'checkbox');
-    const nodeId = cb._mirror.wasmId;
+    const nodeId = cb._mirror.id;
 
     const changeSpy = vi.fn();
     cb.addEventListener('change', changeSpy);
@@ -108,10 +63,10 @@ describe('checkbox change translation', () => {
 
     const doc = getNaiveDocument()!;
     const input = doc.createElement('input') as {
-      _mirror: { wasmId: bigint };
+      _mirror: { id: number };
       addEventListener(type: string, handler: (e: unknown) => void): void;
     };
-    const nodeId = input._mirror.wasmId;
+    const nodeId = input._mirror.id;
 
     const changeSpy = vi.fn();
     input.addEventListener('change', changeSpy);

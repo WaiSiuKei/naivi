@@ -57,8 +57,8 @@ export async function startVueE2E(): Promise<void> {
       (globalThis as Record<string, unknown>).__vueRootClicked = true;
     },
   );
-  (globalThis as Record<string, unknown>).__vueRootId = (root as { _mirror: { wasmId: bigint } })
-    ._mirror.wasmId;
+  (globalThis as Record<string, unknown>).__vueRootId = (root as { _mirror: { id: number } })
+    ._mirror.id;
 
   (globalThis as Record<string, unknown>).__vueProbe = {
     get count() {

@@ -14,7 +14,12 @@
 // stays lazy and the naive renderer (createRenderer) is the only consumer —
 // it receives the facade explicitly, so no global `document` patching.
 
-import { bindWasm, registerEventCallback } from "./native-tree.js";
+import {
+  bindWasm,
+  registerEventCallback,
+  registerFrameRejectedHandler,
+  tick,
+} from "./native-tree.js";
 import { createWasmExports, type WasmBindgenModule } from "./wasm-export.js";
 import { installFontsPendingHook } from "./placeholder-text.js";
 import {
@@ -80,6 +85,33 @@ export interface MountOptions {
 
 let _wasmReady = false;
 
+// Frame-rejection self-heal guard (R15/F3): bound the number of rebuild +
+// re-mount attempts so a persistently rejected frame cannot loop forever.
+const MAX_HEAL_ATTEMPTS = 5;
+let _healAttempts = 0;
+
+/**
+ * Rebuild the facade and re-mount after a `frame_rejected(seq, reason)`.
+ * `emitReset` already cleared the writer + JS-side structures; this re-creates
+ * a fresh document facade (fresh body with new virtual ids) and re-runs the
+ * mount so the JS and Rust sides resync from a clean slate.
+ */
+async function recoverMount(component: any, opts: MountOptions): Promise<void> {
+  _healAttempts++;
+  if (_healAttempts > MAX_HEAL_ATTEMPTS) {
+    console.error(
+      `[naivi] frame-rejection self-heal exceeded ${MAX_HEAL_ATTEMPTS} attempts — giving up`,
+    );
+    return;
+  }
+  console.warn(
+    `[naivi] self-heal attempt ${_healAttempts}/${MAX_HEAL_ATTEMPTS}: rebuilding facade + re-mounting`,
+  );
+  const { initNaiveDocument } = await import("./naive-dom.js");
+  initNaiveDocument();
+  await mount(component, opts);
+}
+
 /**
  * Resolve the wasm-bindgen module (the U4 host's exports).
  *
@@ -120,11 +152,9 @@ async function loadWasm(): Promise<void> {
   // registry installed by the DOM facade (U4 set_event_callback).
   registerEventCallback();
 
-  // Font-state hook parity (plan 040 review #3/#6): the U4 host resolves its
-  // bundled font in Rust; the trailing-edge clear is a no-op safety net.
-  installFontsPendingHook(() => {
-    wasmExports.clear_placeholder_measures();
-  });
+  // Legacy placeholder-measure hook (plan 040): the U5 host resolves its
+  // bundled font in Rust; the trailing-edge clear is a no-op.
+  installFontsPendingHook(() => {});
 
   _wasmReady = true;
 }
@@ -167,6 +197,12 @@ export async function mount(
     console.error('[naive] WASM mode detected but wasm assets not found. Run `naive wasm` to copy them.', err);
     return;
   }
+
+  // Self-heal wiring (R15/F3): on `frame_rejected(seq, reason)` rebuild the
+  // facade and re-mount (guarded by the attempt counter above).
+  registerFrameRejectedHandler(() => {
+    void recoverMount(component, opts);
+  });
 
   const target = opts.target ?? "#app";
   // Use the real browser document for DOM queries (canvas mount target).
@@ -271,4 +307,12 @@ export async function mount(
   }
 
   (globalThis as any).__naiveRoot = naiveRoot;
+
+  // Drive the guest frame loop: rAF → tick() → flush_frame (KD1). The host
+  // renders on its own schedule; this loop only flushes queued ops as frames.
+  const drive = () => {
+    tick();
+    requestAnimationFrame(drive);
+  };
+  requestAnimationFrame(drive);
 }

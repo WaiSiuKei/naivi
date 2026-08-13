@@ -1,13 +1,16 @@
-//! Guest-side IR loader tests (U4 direct protocol).
+//! Guest-side IR loader tests (U5 frame protocol).
 //!
-//! `loadIR` builds the mirror tree through the direct exports
-//! (`create_element` / `create_text_node` / `set_style` / `append_child`) —
-//! there is no `apply_ops` batch anymore; ids resolve synchronously.
+//! `loadIR` builds the mirror tree through native-tree (virtual id +
+//! `CreateElement` / `CreateTextNode` writer ops), routes styles through
+//! `set_style` ops, and wires topology with `append_child` ops — all flushed
+//! as one binary frame.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 
 import { loadIR, type CompileOutputIR } from '../src/ir-loader.js';
-import type { WasmExports } from '../src/wasm-types.js';
+import { bindWasm, clearQueuedOps, emitReset, findRoot } from '../src/native-tree.js';
+import { flush } from '../src/batched-bridge.js';
+import { makeMockWasm, decodeFrames } from './helpers/frame-harness.js';
 
 const fixture: CompileOutputIR = {
   tree: {
@@ -47,99 +50,70 @@ interface StyleCall {
   value: string;
 }
 
-function fakeHost(): {
-  host: WasmExports;
-  styles: () => StyleCall[];
-  textNodes: () => string[];
-  appended: () => number;
-} {
-  let next = 1n;
-  const styles: StyleCall[] = [];
-  const textNodes: string[] = [];
-  let appended = 0;
-  const noop = (): void => {};
-  const host: WasmExports = {
-    create_element: () => next++,
-    create_text_node: (text: string) => {
-      textNodes.push(text);
-      return next++;
-    },
-    set_text: noop,
-    set_attr: noop,
-    set_style: (_n: bigint, key: string, value: string) => {
-      styles.push({ key, value });
-    },
-    append_child: () => {
-      appended += 1;
-    },
-    attach_document_root: noop,
-    insert_before: noop,
-    insert_after: noop,
-    replace_node: noop,
-    remove_node: noop,
-    bind_event: () => 1n,
-    unbind_event: noop,
-    set_event_callback: noop,
-    tick: noop,
-    add_stylesheet: noop,
-    set_placeholder_measures: () => false,
-    clear_placeholder_measures: () => false,
-  };
-  return {
-    host,
-    styles: () => styles,
-    textNodes: () => textNodes,
-    appended: () => appended,
-  };
-}
-
 describe('loadIR', () => {
+  beforeEach(() => {
+    // Reset the module-level mirror state between tests (virtual allocator +
+    // registry live across the suite) and drop any unflushed writer ops.
+    emitReset();
+    clearQueuedOps();
+  });
+
   it('builds a mirror tree matching the IR (AE1)', () => {
-    const { host } = fakeHost();
-    const root = loadIR(fixture, host);
+    const mock = makeMockWasm();
+    bindWasm(mock.wasm);
+    const root = loadIR(fixture);
 
     expect(root.type).toBe(1);
-    expect(root.wasmId).toBe(1n);
+    expect(root.id).toBeGreaterThan(0);
     expect(root.children).toHaveLength(2);
     const span = root.children[0];
     expect(span.children).toHaveLength(2);
     expect(span.children[0].text).toBe('Count: ');
     expect(span.children[1].signalName).toBe('count');
     expect(root.children[1].handlerName).toBe('increment');
+    // The loaded root is the parentless mirror (scene root).
+    expect(findRoot()).toBe(root);
   });
 
-  it('applies base + variant styles and text via the direct protocol (AE2/AE4)', () => {
-    const { host, styles, textNodes, appended } = fakeHost();
-    loadIR(fixture, host);
+  it('applies base + variant styles and text via frame ops (AE2/AE4)', () => {
+    const mock = makeMockWasm();
+    bindWasm(mock.wasm);
+    loadIR(fixture);
+    flush();
 
-    const keys = styles().map((s) => s.key);
+    const records = decodeFrames(mock.frames);
+    const styles: StyleCall[] = records
+      .filter((c) => c.kind === 'set_style')
+      .map((c) => ({ key: c.name!, value: c.value! }));
+    const keys = styles.map((s) => s.key);
     expect(keys).toContain('display');
     expect(keys).toContain('flex-direction');
     expect(keys).toContain('background-color'); // hover variant
     expect(keys).toContain('width');
     expect(keys).toContain('opacity');
-    expect(styles().find((s) => s.key === 'opacity')?.value).toBe('0.5');
+    expect(styles.find((s) => s.key === 'opacity')?.value).toBe('0.5');
     // Text nodes are created with their literal content.
-    expect(textNodes()).toContain('Count: ');
+    expect(records.some((c) => c.kind === 'create_text_node' && c.text === 'Count: ')).toBe(true);
     // Every non-root node is appended under its parent.
-    expect(appended()).toBe(4);
+    expect(records.filter((c) => c.kind === 'append_child')).toHaveLength(4);
   });
 
   it('records handler and signal bindings on mirrors (AE3)', () => {
-    const { host } = fakeHost();
-    const root = loadIR(fixture, host);
+    const mock = makeMockWasm();
+    bindWasm(mock.wasm);
+    const root = loadIR(fixture);
     expect(root.children[1].handlerName).toBe('increment');
     const signalText = root.children[0].children[1];
     expect(signalText.signalName).toBe('count');
   });
 
   it('tolerates unknown style keys and missing styleId', () => {
-    const { host } = fakeHost();
-    const root = loadIR(fixture, host);
-    expect(root.wasmId).toBe(1n);
+    const mock = makeMockWasm();
+    bindWasm(mock.wasm);
+    const root = loadIR(fixture);
+    expect(root.id).toBeGreaterThan(0);
     // `color: 'nope'` is forwarded verbatim; the loader must not throw.
-    expect(
-      host.set_style,
-    ).toBeDefined();
+    flush();
+    expect(decodeFrames(mock.frames).some((c) => c.kind === 'set_style' && c.name === 'color')).toBe(true);
   });
 });

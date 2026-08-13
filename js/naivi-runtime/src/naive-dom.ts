@@ -8,7 +8,7 @@
 
 import {
   type NodeMirror,
-  isWasmReady,
+  addStylesheet as nativeAddStylesheet,
   setEventElementResolver,
 } from "./native-tree.js";
 import {
@@ -24,7 +24,6 @@ import {
   addEventListener as nativeAddEventListener,
   removeEventListener as nativeRemoveEventListener,
   getBoundingClientRect as nativeGetBoundingClientRect,
-  isBatchPending,
 } from "./batched-bridge.js";
 import type { EventType, EventCallback } from "./wasm-types.js";
 
@@ -120,12 +119,6 @@ export interface NaiveTextNode extends DOMNodeBase {
 
 export type NaiveNode = NaiveElement | NaiveTextNode;
 
-let _mockId = 0;
-
-function nextId(): number {
-  return ++_mockId;
-}
-
 // ── Child list helpers ──────────────────────────────────────────────
 
 function updateSiblingLinks(children: NaiveNode[]): void {
@@ -157,61 +150,17 @@ function childIndex(parent: NaiveNode, child: NaiveNode): number {
  * - native channel: `naivi desktop` passes `node_modules/.naive/styles.css`
  *   and the host evals `__NAIVE_CSS` before the guest bundle.
  *
- * The text is injected as a stylo author stylesheet (`add_stylesheet`), so
- * class / tag / attribute / `:hover` / `:active` / `:checked` selectors are
- * matched natively by blitz's style engine. Inline `:style` bindings
- * (el.style → `set_style`) win the cascade.
+ * The text is queued as an `AddStylesheet` frame op (the writer flushes it
+ * with the next frame), so class / tag / attribute / `:hover` / `:active` /
+ * `:checked` selectors are matched natively by blitz's style engine. Inline
+ * `:style` bindings (el.style → `set_style`) win the cascade.
  */
 export async function loadCSSClassStyles(): Promise<void> {
   const css = (globalThis as unknown as Record<string, unknown>).__NAIVE_CSS;
   if (typeof css !== "string" || css.trim() === "") {
     return;
   }
-  const { getWasm } = await import("./native-tree.js");
-  getWasm().add_stylesheet(css);
-}
-
-/**
- * Recursively upgrade a mock node subtree to WASM-backed mirrors.
- * Called when a node created before WASM was ready is inserted into
- * a WASM-backed parent (e.g., Vue components imported before mount()).
- */
-function upgradeSubtreeToWasm(node: NaiveNode): void {
-  if (node.nodeType === 3) {
-    // Text node: create a WASM text mirror with current text content
-    const newMirror = nativeCreateTextNode(node.textContent || '');
-    node._mirror = newMirror;
-  } else if (node.nodeType === 1) {
-    // Element node: create a WASM element mirror
-    const el = node as NaiveElement;
-    const tag = el.tagName?.toLowerCase() || 'div';
-    const newMirror = nativeCreateElement(tag);
-    // Copy attributes already set on the node (attribute-ish keys only — the
-    // U4 split routes class/id to set_attr and other props to set_style, so
-    // arbitrary data-* attrs must go through set_attr).
-    for (const [k, v] of Object.entries(el._attrs)) {
-      nativeSetAttr(newMirror, k, String(v));
-    }
-    const cls = el._attrs['class'] || el._attrs['className'] || '';
-    if (cls) {
-      nativeSetAttr(newMirror, 'class', cls);
-    }
-    // Forward stored inline style properties (e.g. display:none from v-show)
-    const styleStore = el._styleStore as Record<string, string> | undefined;
-    if (styleStore) {
-      for (const [k, v] of Object.entries(styleStore)) {
-        nativeSetProp(newMirror, k, v);
-      }
-    }
-    el._mirror = newMirror;
-    // Recursively upgrade children, then insert them into the new mirror
-    for (const child of el.childNodes) {
-      upgradeSubtreeToWasm(child);
-      newMirror.children.push(child._mirror);
-      child._mirror.parent = newMirror;
-      nativeInsertNode(newMirror, child._mirror);
-    }
-  }
+  nativeAddStylesheet(css);
 }
 
 function createNaiveElement(tag: string): NaiveElement {
@@ -219,19 +168,10 @@ function createNaiveElement(tag: string): NaiveElement {
   if (tag === "input") {
     console.trace("[naive] Creating INPUT element");
   }
-  // Use native-tree WASM when available, otherwise JS mock
-  let mirror: NodeMirror;
-  if (isWasmReady()) {
-    mirror = nativeCreateElement(tag.toLowerCase());
-  } else {
-    mirror = {
-      id: nextId(),
-      type: 1,
-      parent: null,
-      children: [],
-      wasmId: 0n,
-    };
-  }
+  // Always create a writer-backed mirror: creation now allocates a virtual id
+  // and queues a CreateElement op (no synchronous host call), so the old
+  // pre-WASM mock path is gone (KD3).
+  const mirror = nativeCreateElement(tag.toLowerCase());
 
   const el: NaiveElement = {
     nodeType: 1,
@@ -298,14 +238,8 @@ function createNaiveElement(tag: string): NaiveElement {
         this._mirror.children.push(child._mirror);
         child._mirror.parent = this._mirror;
       }
-      // Upgrade child to WASM if needed (Vue may have created it before WASM was ready)
-      if (isWasmReady() && child._mirror.wasmId === 0n && !isBatchPending(child._mirror)) {
-        upgradeSubtreeToWasm(child);
-      }
-      // Sync to WASM
-      if (isWasmReady()) {
-        nativeInsertNode(this._mirror, child._mirror);
-      }
+      // Sync to the host (the writer batches the insert op until flush).
+      nativeInsertNode(this._mirror, child._mirror);
       return child;
     },
 
@@ -330,14 +264,8 @@ function createNaiveElement(tag: string): NaiveElement {
         }
         child._mirror.parent = this._mirror;
       }
-      // Upgrade child to WASM if needed
-      if (isWasmReady() && child._mirror.wasmId === 0n && !isBatchPending(child._mirror)) {
-        upgradeSubtreeToWasm(child);
-      }
-      // Sync to WASM
-      if (isWasmReady()) {
-        nativeInsertNode(this._mirror, child._mirror);
-      }
+      // Sync to the host (the writer batches the insert op until flush).
+      nativeInsertNode(this._mirror, child._mirror);
       return child;
     },
 
@@ -352,16 +280,13 @@ function createNaiveElement(tag: string): NaiveElement {
         this._mirror.children.splice(mIdx, 1);
         child._mirror.parent = null;
       }
-      // Sync to WASM
-      if (isWasmReady()) {
-        nativeRemoveNode(child._mirror);
-      }
+      // Sync to the host (the writer batches the remove op until flush).
+      nativeRemoveNode(child._mirror);
       return child;
     },
 
     setAttribute(name: string, value: string): void {
       this._attrs[name] = value;
-      if (!isWasmReady() || (this._mirror.wasmId === 0n && !isBatchPending(this._mirror))) return;
       if (name === "class") {
         // Sync the class attribute to Rust for selector matching (plan 061).
         nativeSetAttr(this._mirror, "class", value);
@@ -388,7 +313,7 @@ function createNaiveElement(tag: string): NaiveElement {
     },
     removeAttribute(name: string): void {
       delete this._attrs[name];
-      if (name === "checked" && isWasmReady()) {
+      if (name === "checked") {
         nativeSetChecked(this._mirror, false);
       }
     },
@@ -402,20 +327,18 @@ function createNaiveElement(tag: string): NaiveElement {
     addEventListener(type: string, handler: EventListener): void {
       if (!this._events[type]) this._events[type] = [];
       this._events[type].push(handler);
-      // Route through the WASM event bridge when the node is real (plan 034,
-      // U5): Rust dispatch invokes the JS handler on interaction.
-      if (isWasmReady() && (this._mirror.wasmId !== 0n || isBatchPending(this._mirror))) {
-        const handlerId = nativeAddEventListener(
-          this._mirror,
-          type as EventType,
-          // DOM EventListener → engine-neutral EventCallback (the dispatched
-          // event is the NaiveDomEvent subset; Vue handlers read type/coords).
-          handler as unknown as EventCallback,
-        ) ?? 0n;
-        if (handlerId !== 0n) {
-          if (!this._handlerIds) this._handlerIds = new Map();
-          this._handlerIds.set(handler, handlerId);
-        }
+      // Route through the native event bridge (plan 034, U5): the host
+      // dispatches via `data-naivi-id` and invokes this JS handler.
+      const handlerId = nativeAddEventListener(
+        this._mirror,
+        type as EventType,
+        // DOM EventListener → engine-neutral EventCallback (the dispatched
+        // event is the NaiveDomEvent subset; Vue handlers read type/coords).
+        handler as unknown as EventCallback,
+      ) ?? 0n;
+      if (handlerId !== 0n) {
+        if (!this._handlerIds) this._handlerIds = new Map();
+        this._handlerIds.set(handler, handlerId);
       }
     },
     removeEventListener(type: string, handler: EventListener): void {
@@ -424,12 +347,10 @@ function createNaiveElement(tag: string): NaiveElement {
         const idx = list.indexOf(handler);
         if (idx !== -1) list.splice(idx, 1);
       }
-      if (isWasmReady() && (this._mirror.wasmId !== 0n || isBatchPending(this._mirror))) {
-        const handlerId = this._handlerIds?.get(handler);
-        if (handlerId) {
-          nativeRemoveEventListener(handlerId);
-          this._handlerIds?.delete(handler);
-        }
+      const handlerId = this._handlerIds?.get(handler);
+      if (handlerId) {
+        nativeRemoveEventListener(handlerId);
+        this._handlerIds?.delete(handler);
       }
     },
 
@@ -438,15 +359,13 @@ function createNaiveElement(tag: string): NaiveElement {
     },
   };
 
-  // Plan 066 U4: the style stub wires `_styleStore` on the element so the
-  // pre-WASM upgrade path can forward stored inline styles (incl. visibility).
+  // Plan 066 U4: the style stub wires `_styleStore` on the element so stored
+  // inline styles (incl. visibility) survive re-render churn.
   el.style = createStyleStub(el);
 
-  // Register real (wasm-backed) elements by blitz node id so event dispatch
-  // can set `event.target` and sync the input value into the facade.
-  if (mirror.wasmId !== 0n) {
-    _elByWasmId.set(Number(mirror.wasmId), el);
-  }
+  // Register elements by virtual id so event dispatch can set `event.target`
+  // and sync the input value into the facade.
+  _elByVid.set(mirror.id, el);
 
   // Text inputs: keep the facade `value` in sync with the engine's text
   // editor even when no `v-model` / `input` listener is bound (the reference
@@ -460,19 +379,7 @@ function createNaiveElement(tag: string): NaiveElement {
 }
 
 function createNaiveTextNode(text = ""): NaiveTextNode {
-  let mirror: NodeMirror;
-  if (isWasmReady()) {
-    mirror = nativeCreateTextNode(text);
-  } else {
-    mirror = {
-      id: nextId(),
-      type: 3,
-      parent: null,
-      children: [],
-      wasmId: 0n,
-      text,
-    };
-  }
+  const mirror = nativeCreateTextNode(text);
 
   return {
     nodeType: 3,
@@ -490,9 +397,7 @@ function createNaiveTextNode(text = ""): NaiveTextNode {
     },
     set textContent(v: string) {
       mirror.text = v;
-      if (isWasmReady() && (mirror.wasmId !== 0n || isBatchPending(mirror))) {
-        nativeSetText(mirror, v);
-      }
+      nativeSetText(mirror, v);
     },
 
     appendChild(_child: NaiveNode): NaiveNode {
@@ -531,16 +436,9 @@ function createStyleStub(el: NaiveElement): CSSStyleDeclaration {
   // protocol-size optimization that does not apply to the direct naivi
   // protocol.)
   const forward = (k: string, v: string) => {
-    // Read the LIVE mirror at call time: after `upgradeSubtreeToWasm` swaps
-    // el._mirror, the stub must forward to the upgraded WASM mirror, not the
-    // pre-upgrade mock (plan 066 review fix).
-    const m = el._mirror;
-    if (
-      isWasmReady() &&
-      (m.wasmId !== 0n || isBatchPending(m))
-    ) {
-      nativeSetProp(m, toCssProp(k), v);
-    }
+    // Forward to the LIVE mirror at call time (mirrors are always
+    // writer-backed — no mock/upgrade path).
+    nativeSetProp(el._mirror, toCssProp(k), v);
   };
   const proxy = new Proxy(store, {
     get(_t, key: string) {
@@ -655,8 +553,8 @@ export interface NaiveDocumentLike {
 
 let _globalDoc: NaiveDocumentLike | null = null;
 
-/** blitz node id (as `number`) → facade element, for event target resolution. */
-const _elByWasmId = new Map<number, NaiveElement>();
+/** virtual id (`number`) → facade element, for event target resolution. */
+const _elByVid = new Map<number, NaiveElement>();
 
 function createNaiveDocument(): NaiveDocumentLike {
   const doc = {} as NaiveDocumentLike;
@@ -665,14 +563,12 @@ function createNaiveDocument(): NaiveDocumentLike {
   // roots (and their percent-sized descendants) get a real layout container
   // instead of collapsing to content size.
   const body = createNaiveElement("body");
-  if (isWasmReady()) {
-    nativeSetProp(body._mirror, "width", "100%");
-    nativeSetProp(body._mirror, "height", "100%");
-    // Attach the body to the blitz document root so resolve / hit-test see a
-    // real DOM (blitz treats the root as DOM-less until it has an element
-    // child; without this nothing renders and hittest warns "No DOM").
-    nativeAttachDocumentRoot(body._mirror);
-  }
+  nativeSetProp(body._mirror, "width", "100%");
+  nativeSetProp(body._mirror, "height", "100%");
+  // Attach the body to the blitz document root so resolve / hit-test see a
+  // real DOM (blitz treats the root as DOM-less until it has an element
+  // child; without this nothing renders and hittest warns "No DOM").
+  nativeAttachDocumentRoot(body._mirror);
 
   // Fill in the doc shell — only the methods the naive renderer / host use.
   Object.assign(doc, {
@@ -700,7 +596,7 @@ export function initNaiveDocument(): void {
   // checkboxes/radios (so `el.checked` / `event.target.checked` reflect the
   // toggled state; the dispatcher then emits the synthetic `change` event).
   setEventElementResolver((nodeId: number, value?: string) => {
-    const el = _elByWasmId.get(nodeId) ?? null;
+    const el = _elByVid.get(nodeId) ?? null;
     if (el && value !== undefined) {
       if (el._attrs.type === "checkbox" || el._attrs.type === "radio") {
         el._attrs.checked = value === "true" ? "true" : "false";
