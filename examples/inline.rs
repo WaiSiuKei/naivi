@@ -3,6 +3,15 @@
 use dioxus::prelude::*;
 
 fn main() {
+    // Surface engine warnings (e.g. unsupported inline box styling) on stderr.
+    // `fmt::init()` uses an empty env filter when RUST_LOG is unset, which
+    // silences everything — default to `warn` instead.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .init();
     dioxus_native::launch(app);
 }
 

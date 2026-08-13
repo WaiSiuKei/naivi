@@ -12,7 +12,9 @@ use style::{
     data::ElementData as StyloElementData,
     shared_lock::StylesheetGuards,
     values::{
-        computed::{Content, ContentItem, Display, Float, TextTransform},
+        computed::{
+            CSSPixelLength, Content, ContentItem, Display, Float, LengthPercentage, TextTransform,
+        },
         specified::box_::{DisplayInside, DisplayOutside},
     },
 };
@@ -828,6 +830,135 @@ fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: NodeId) {
     }
 }
 
+/// Warn once per document when a non-atomic inline element carries box styling
+/// (margin/padding/border) that blitz does not lay out or render for inline
+/// elements — see docs/plans/2026-08-13-075-feat-inline-box-styling-warning-plan.md.
+///
+/// Non-atomic inline elements are constructed as text-only style spans: their
+/// border/margin/padding silently diverge from browsers. A single warning per
+/// document lifetime turns the silent divergence into a visible diagnostic
+/// without per-element spam.
+fn warn_inline_box_styling_once(nodes: &crate::NodeTree, node_id: NodeId, warned: &mut bool) {
+    if *warned {
+        return;
+    }
+
+    let node = &nodes[node_id];
+
+    // Only authored elements qualify; anonymous blocks are not styled content.
+    let NodeData::Element(element_data) = &node.data else {
+        return;
+    };
+
+    // Atomic inline boxes (replaced elements, form controls) are laid out with
+    // a real box and do support these properties; `<br>` is a line break.
+    let tag_name = &element_data.name.local;
+    if is_replaced_element(tag_name)
+        || *tag_name == local_name!("input")
+        || *tag_name == local_name!("textarea")
+        || *tag_name == local_name!("button")
+        || *tag_name == local_name!("br")
+    {
+        return;
+    }
+
+    let display = node.display_style().unwrap_or(Display::inline());
+    if display.outside() != DisplayOutside::Inline || display.inside() != DisplayInside::Flow {
+        return;
+    }
+
+    // Scope the style read so its borrow of `node` ends before we set the flag.
+    let trigger = {
+        let Some(styles) = node.primary_styles() else {
+            return;
+        };
+
+        // A `<length-percentage>` counts as non-zero when any component is
+        // non-zero; percentages are not resolved (construction has no parent
+        // width) and are treated conservatively as potentially non-zero.
+        fn lp_nonzero(lp: &LengthPercentage) -> bool {
+            use style::values::computed::length_percentage::Unpacked;
+            match lp.unpack() {
+                Unpacked::Length(length) => length.px() != 0.0,
+                Unpacked::Percentage(percentage) => percentage.0 != 0.0,
+                Unpacked::Calc(calc) => {
+                    calc.resolve(CSSPixelLength::new(0.0)).px() != 0.0
+                        || calc.resolve(CSSPixelLength::new(1.0)).px() != 0.0
+                }
+            }
+        }
+
+        let margin = styles.get_margin();
+        let padding = styles.get_padding();
+        let border = styles.get_border();
+
+        // Margin sides are a `GenericMargin` enum (`auto` / length-percentage /
+        // anchor functions); only the length-percentage variant can be non-zero.
+        let margin_side_nonzero =
+            |val: &style::values::generics::length::GenericMargin<LengthPercentage>| -> bool {
+                match val {
+                    style::values::generics::length::GenericMargin::LengthPercentage(lp) => {
+                        lp_nonzero(lp)
+                    }
+                    _ => false,
+                }
+            };
+        let margin_nonzero = margin_side_nonzero(&margin.margin_top)
+            || margin_side_nonzero(&margin.margin_right)
+            || margin_side_nonzero(&margin.margin_bottom)
+            || margin_side_nonzero(&margin.margin_left);
+        let padding_nonzero = lp_nonzero(&padding.padding_top.0)
+            || lp_nonzero(&padding.padding_right.0)
+            || lp_nonzero(&padding.padding_bottom.0)
+            || lp_nonzero(&padding.padding_left.0);
+
+        let current_color = styles.clone_color();
+        let border_side_visible =
+            |width: &style::values::computed::BorderSideWidth,
+             style: style::values::computed::BorderStyle,
+             color: &style::values::computed::Color| {
+                !style.none_or_hidden()
+                    && width.0.to_f32_px() > 0.0
+                    && color.resolve_to_absolute(&current_color).alpha != 0.0
+            };
+        let border_visible = border_side_visible(
+            &border.border_top_width,
+            border.border_top_style,
+            &border.border_top_color,
+        ) || border_side_visible(
+            &border.border_right_width,
+            border.border_right_style,
+            &border.border_right_color,
+        ) || border_side_visible(
+            &border.border_bottom_width,
+            border.border_bottom_style,
+            &border.border_bottom_color,
+        ) || border_side_visible(
+            &border.border_left_width,
+            border.border_left_style,
+            &border.border_left_color,
+        );
+
+        margin_nonzero || padding_nonzero || border_visible
+    };
+
+    if !trigger {
+        return;
+    }
+
+    let node_id = node.id;
+    *warned = true;
+
+    #[cfg(feature = "tracing")]
+    tracing::warn!(
+        node_id = ?node_id,
+        "inline box styling (margin/padding/border) is not yet supported on inline elements: \
+         it is neither laid out nor rendered. Consider moving the box styling to a block-level wrapper element."
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = node_id;
+}
+
 /// Find and return the "layout_children" (inline boxes) for an inline layout
 /// without actually constructing the layout. This allows us to defer the expensive
 /// construction of the Parley layout (which invokes text shaping) to a paralell phase.
@@ -841,6 +972,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
     iter_children_and_pseudos!(doc.nodes[inline_context_root_node_id], |child_id| {
         find_inline_layout_embedded_boxes_recursive(
             &mut doc.nodes,
+            &mut doc.inline_box_styling_warned,
             inline_context_root_node_id,
             child_id,
             layout_children,
@@ -866,10 +998,15 @@ pub(crate) fn find_inline_layout_embedded_boxes(
 
     fn find_inline_layout_embedded_boxes_recursive(
         nodes: &mut crate::NodeTree,
+        warned: &mut bool,
         parent_id: NodeId,
         node_id: NodeId,
         layout_children: &mut ThinVec<NodeId>,
     ) {
+        // One-time-per-document diagnostic for box styling that inline
+        // elements don't render (R1-R6 of the inline-box-styling warning plan).
+        warn_inline_box_styling_once(&*nodes, node_id, warned);
+
         let node = &mut nodes[node_id];
 
         // Set layout_parent for node.
@@ -895,6 +1032,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                         iter_children!(nodes[node_id], |child_id| {
                             find_inline_layout_embedded_boxes_recursive(
                                 nodes,
+                                warned,
                                 parent_id,
                                 child_id,
                                 layout_children,
@@ -917,6 +1055,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                             iter_children_and_pseudos!(nodes[node_id], |child_id| {
                                 find_inline_layout_embedded_boxes_recursive(
                                     nodes,
+                                    warned,
                                     node_id,
                                     child_id,
                                     layout_children,

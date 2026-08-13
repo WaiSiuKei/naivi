@@ -222,6 +222,11 @@ pub struct BaseDocument {
     /// There is no way to create the tree - publicly or privately - that would invalidate that invariant.
     pub(crate) nodes: Box<NodeTree>,
 
+    /// Whether the "inline box styling unsupported" warning has already been
+    /// emitted for this document — at most one per document lifetime (see
+    /// docs/plans/2026-08-13-075-feat-inline-box-styling-warning-plan.md R5).
+    pub inline_box_styling_warned: bool,
+
     /// The id of the root node (a Document node)
     pub(crate) root_node_id: NodeId,
 
@@ -449,6 +454,7 @@ impl BaseDocument {
 
             guard,
             nodes,
+            inline_box_styling_warned: false,
             root_node_id: NodeId::default(),
             stylist,
             animations: DocumentAnimationSet::default(),
