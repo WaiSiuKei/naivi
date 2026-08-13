@@ -24,6 +24,7 @@
 
 pub mod document;
 pub mod events;
+pub mod generated;
 pub mod ops;
 
 /// rquickjs (QuickJS-NG) FFI surface for the native channel (feature
