@@ -71,3 +71,25 @@ fn all_is_exhaustive() {
     let expected_names: Vec<&str> = EXPECTED.iter().map(|(n, _)| *n).collect();
     assert_eq!(names, expected_names);
 }
+
+/// Frame opcode drift guard (stage 2): generated op constants vs the SOT `OP`
+/// table reference. Same hardcoded-reference discipline as the event guard.
+#[test]
+fn generated_op_constants_match_sot() {
+    use naivi_dom::generated::op;
+    assert_eq!(op::CREATE_ELEMENT, 0x01);
+    assert_eq!(op::CREATE_TEXT, 0x02);
+    assert_eq!(op::SET_TEXT, 0x03);
+    assert_eq!(op::SET_ATTR, 0x04);
+    assert_eq!(op::SET_STYLE, 0x05);
+    assert_eq!(op::APPEND_CHILD, 0x06);
+    assert_eq!(op::ATTACH_ROOT, 0x07);
+    assert_eq!(op::INSERT_BEFORE, 0x08);
+    assert_eq!(op::INSERT_AFTER, 0x09);
+    assert_eq!(op::REPLACE_NODE, 0x0a);
+    assert_eq!(op::REMOVE_NODE, 0x0b);
+    assert_eq!(op::BIND_EVENT, 0x0c);
+    assert_eq!(op::UNBIND_EVENT, 0x0d);
+    assert_eq!(op::ADD_STYLESHEET, 0x0e);
+    assert_eq!(op::RESET, 0x0f);
+}

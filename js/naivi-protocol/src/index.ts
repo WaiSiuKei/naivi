@@ -82,3 +82,43 @@ export function kindToEventType(kind: number): WireEventType {
   }
   return 'click';
 }
+
+// ── Op table (stage 2 — batched binary frame transport) ──────────────────────
+//
+// Frame wire format (KTD1): DOM-change frames are JS→Rust.
+//   [seq: u32][count: u16][op…]
+// each op is [opcode: u8][operands]; strings are [len: u16][utf8] except
+// `AddStylesheet` which uses [len: u32][utf8] (compiled CSS can exceed 64KiB).
+// Node operands are JS-assigned virtual ids (u32). `0` is unused/never a node.
+//
+// The build.rs parser reads this block too — keep it a bare literal.
+
+export const OP = {
+  CreateElement: 0x01,
+  CreateText: 0x02,
+  SetText: 0x03,
+  SetAttr: 0x04,
+  SetStyle: 0x05,
+  AppendChild: 0x06,
+  AttachRoot: 0x07,
+  InsertBefore: 0x08,
+  InsertAfter: 0x09,
+  ReplaceNode: 0x0a,
+  RemoveNode: 0x0b,
+  BindEvent: 0x0c,
+  UnbindEvent: 0x0d,
+  AddStylesheet: 0x0e,
+  Reset: 0x0f,
+} as const;
+
+export type OpCode = (typeof OP)[keyof typeof OP];
+
+/**
+ * Frame-rejection signal: Rust→JS callback `(seq, reason)`. Not a DOM event
+ * and not part of the DOM-change frame — it is delivered via the dedicated
+ * `set_frame_rejected_callback` (KTD6).
+ */
+export const FRAME_REJECTED = 0x01 as const;
+
+/** u16 string-cap for frame operands (except AddStylesheet, which uses u32). */
+export const MAX_U16_STRING = 0xffff as const;
