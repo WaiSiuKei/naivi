@@ -153,16 +153,32 @@ describe('3d rule (KC1320) and the KTD3 two-input separation', () => {
     expect(report.findings.map((f) => f.code)).toEqual(['KC1320']);
   });
 
-  it('translateZ(0) and a bare perspective property do not trigger KC1320 (kiln rule text)', () => {
+  it('translateZ(0) and 2D rotate/scale/translate do not trigger KC1320 (R3)', () => {
     const report = scanCompiledCss(
       [
         '.a { transform: translateZ(0); }',
-        '.b { perspective: 1000px; }',
-        '.c { translate: 10px; }',
+        '.b { translate: 10px; }',
+        '.c { rotate: 45deg; }',
+        '.d { scale: 1.5; }',
+        '.e { scale: 1 2; }',
       ].join('\n'),
     );
     expect(report.findings).toHaveLength(0);
-    expect(report.declarations).toBe(3);
+    expect(report.declarations).toBe(5);
+  });
+
+  it('flags the Tailwind v4 3D utility surface (perspective / preserve-3d / rotate axis / 3-value scale)', () => {
+    const report = scanCompiledCss(
+      [
+        '.a { perspective: 1000px; }',
+        '.b { perspective-origin: center; }',
+        '.c { transform-style: preserve-3d; }',
+        '.d { rotate: x 45deg; }',
+        '.e { scale: 1 1 1.5; }',
+      ].join('\n'),
+    );
+    expect(report.findings).toHaveLength(5);
+    expect(report.findings.every((f) => f.code === 'KC1320')).toBe(true);
   });
 
   it('scanAuthorCss applies ONLY the 3d rule (KTD3 carrier input)', () => {
@@ -748,5 +764,31 @@ describe('code-review followups (ce-code-review 073)', () => {
     expect(scanCompiledCss('a:has(b){}').findings[0].code).toBe('KC1002');
     expect(scanCompiledCss('@container (min-width:400px){.a{color:red}}').findings[0].code)
       .toBe('KC1401');
+  });
+
+  it('fails the check when the compiled styles.css cannot be parsed (fail-closed, R1)', () => {
+    const dir = makeFixture({
+      'node_modules/.naive/styles.css': '.foo { color: red;\n',
+      'src/App.vue': '<template><div class="business-card">x</div></template>\n',
+    });
+    try {
+      const { error } = runAndCapture(dir);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/Cannot parse CSS/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('scanCompiledCss still warns (never throws) on malformed CSS by default (KTD4)', () => {
+    const report = scanCompiledCss('.foo { color: red;');
+    expect(report.declarations).toBe(0);
+    expect(report.findings).toHaveLength(0);
+    expect(report.percent()).toBe(100);
+  });
+
+  it('scanCompiledCss throws with strictParse — the compiled gate input (R1)', () => {
+    expect(() => scanCompiledCss('.foo { color: red;', { strictParse: true }))
+      .toThrow(/Cannot parse CSS/);
   });
 });

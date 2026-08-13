@@ -107,22 +107,48 @@ function propertyRule(property: string, value: string): readonly [string, string
       return undefined;
     case 'transform':
     case 'translate':
-      return propertyRule3d(value);
+    case 'perspective':
+    case 'perspective-origin':
+    case 'transform-style':
+    case 'rotate':
+    case 'scale':
+      return propertyRule3d(property, value);
     default:
       return undefined;
   }
 }
 
+const KC1320: readonly [string, string] = [
+  'KC1320',
+  '3D transforms are not supported — use the 2D subset',
+];
+
 /**
- * kiln's 3d arm: `value.contains("3d") || value.contains("perspective")`.
- * `translateZ(0)` contains neither substring, so it does NOT trigger KC1320
- * (KTD3 — no source marker needed for that case).
+ * KC1320 — 3D rendering features. Starts from kiln's rule text:
+ * `transform`/`translate` values containing "3d"/"perspective" (`translateZ(0)`
+ * contains neither substring, so it does NOT trigger). Extended for the
+ * Tailwind v4 3D utility surface (plan 073 U4 / ce-code-review 073 R3):
+ * `perspective`/`perspective-origin` are inherently 3D; `transform-style:
+ * preserve-3d`, `rotate` with an x/y/z axis token, and 3-value `scale` are
+ * 3D. 2D forms (`rotate: 45deg`, `scale: 1.5`, `scale: 1 2`) are not flagged.
  */
-function propertyRule3d(value: string): readonly [string, string] | undefined {
-  if (value.includes('3d') || value.includes('perspective')) {
-    return ['KC1320', '3D transforms are not supported — use the 2D subset'];
+function propertyRule3d(property: string, value: string): readonly [string, string] | undefined {
+  switch (property) {
+    case 'transform':
+    case 'translate':
+      return value.includes('3d') || value.includes('perspective') ? KC1320 : undefined;
+    case 'perspective':
+    case 'perspective-origin':
+      return KC1320;
+    case 'transform-style':
+      return value.includes('3d') ? KC1320 : undefined;
+    case 'rotate':
+      return /(^|\s)[xyz](\s|$)/.test(value) ? KC1320 : undefined;
+    case 'scale':
+      return value.trim().split(/\s+/).length >= 3 ? KC1320 : undefined;
+    default:
+      return undefined;
   }
-  return undefined;
 }
 
 /** kiln selector_rule. */
@@ -153,6 +179,10 @@ function atRuleRule(name: string): readonly [string, string] | undefined {
 
 export interface ScanOptions {
   file?: string;
+  /** Fail (throw) instead of warn + empty when the CSS cannot be parsed.
+   * Used for the compiled styles.css so an unparseable gate input is a hard
+   * failure, not a silent pass (ce-code-review 073 R1). */
+  strictParse?: boolean;
 }
 
 function scanCss(css: string, opts: ScanOptions, arm: RuleArm): CheckReport {
@@ -161,10 +191,13 @@ function scanCss(css: string, opts: ScanOptions, arm: RuleArm): CheckReport {
     root = parseCss(css, { from: opts.file });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    if (opts.strictParse) {
+      throw new Error(`Cannot parse CSS${opts.file ? ` in ${opts.file}` : ''}: ${msg}`);
+    }
     console.warn(
       C.warn(`Cannot parse CSS${opts.file ? ` in ${opts.file}` : ''}: ${msg}`),
     );
-    // KTD4: unparseable CSS is a warning, not a hit — empty report.
+    // KTD4: unparseable CSS fragments are a warning, not a hit — empty report.
     return makeReport(0, []);
   }
 
@@ -202,15 +235,10 @@ function scanCss(css: string, opts: ScanOptions, arm: RuleArm): CheckReport {
     const value = decl.value.trim();
     if (!property || !value) return;
     declarations += 1;
-    // The 3d arm mirrors kiln's KC1320 exactly: only transform/translate
-    // properties whose value contains "3d"/"perspective" (KTD3). Applying
-    // the value substring check to every property would flag benign values
-    // like `content: "3d"` or `font-family: perspective`.
-    const hit = arm === '3d'
-      ? (property === 'transform' || property === 'translate'
-        ? propertyRule3d(value)
-        : undefined)
-      : propertyRule(property, value);
+    // The 3d arm applies ONLY the KC1320 3D rules (KTD3 — author CSS carrier);
+    // propertyRule3d is property-scoped, so benign values like `content: "3d"`
+    // on other properties never trip it.
+    const hit = arm === '3d' ? propertyRule3d(property, value) : propertyRule(property, value);
     if (!hit) return;
     let origin: string | undefined;
     if (decl.parent && decl.parent.type === 'rule') {
@@ -586,7 +614,9 @@ export function runCssSubsetCheck(cwd: string): void {
     return;
   }
 
-  const compiled = scanCompiledCss(css, { file: STYLES_OUTPUT_REL });
+  // R1 (ce-code-review 073): an unparseable compiled styles.css is a hard
+  // failure — the gate cannot verify the subset claim, so it must not pass.
+  const compiled = scanCompiledCss(css, { file: STYLES_OUTPUT_REL, strictParse: true });
   let findings: Finding[] = [...compiled.findings];
 
   // KTD3 second input: raw author CSS recollected from the project (3d only).

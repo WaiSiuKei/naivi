@@ -20,7 +20,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:integration": "node tests/integration-css-check.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^6.0.8",
