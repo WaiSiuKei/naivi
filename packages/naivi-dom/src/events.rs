@@ -20,6 +20,15 @@ use std::rc::Rc;
 pub use crate::generated::NaiviEventKind;
 
 impl NaiviEventKind {
+    /// Whether this kind does **not** bubble in naivi (KD5): only the chain
+    /// head is dispatched. `mouseenter`/`mouseleave` are the naivi-fixed
+    /// non-bubbling set; the engine already prunes `scroll`/`focus`/`blur`/
+    /// `pointerenter`/`pointerleave`/`applekeybinding` to `[target]`, so they
+    /// never reach ancestors regardless.
+    pub fn is_non_bubbling(self) -> bool {
+        matches!(self, Self::MouseEnter | Self::MouseLeave)
+    }
+
     /// Map a blitz [`DomEvent`] to the corresponding naivi kind.
     ///
     /// Returns `None` for event kinds naivi does not expose to the guest
@@ -152,6 +161,12 @@ pub struct NaiviEvent {
     /// queue time, KTD2). `0` when the node has no such attribute (legacy
     /// per-op binding; the guest cannot resolve it).
     pub node: u32,
+    /// The **ordered bound chain** (KTD3): every node on the engine's hit
+    /// chain — target first, then ancestors — that has this kind bound and a
+    /// resolvable virtual id. `node` is `chain[0]`; JS dispatches along this
+    /// chain so `stopPropagation` can truncate (KTD3). Empty never occurs on
+    /// a queued event (the handler drops chainless events).
+    pub chain: Vec<u32>,
     /// The event kind.
     pub kind: NaiviEventKind,
     /// Client (viewport-relative) coordinates, when the underlying DOM event
@@ -228,26 +243,40 @@ impl EventHandler for NaiviEventHandler {
         let (delta_x, delta_y) = wheel_delta(&event.data);
         let ime_data = ime_text(&event.data);
         let bindings = self.bindings.borrow();
-        let Some(node) = chain
-            .iter()
-            .copied()
-            .find(|id| bindings.get(id).is_some_and(|kinds| kinds.contains(&kind)))
-        else {
-            return;
-        };
-        // Reverse-look-up the guest's virtual id from the bound node's
-        // `data-naivi-id` attribute (KTD2). The frame `bind_event_v` writes
-        // the virtual id there; a missing/unparseable value yields 0 (the
-        // guest drops the event).
-        let virtual_id = doc
-            .inner()
-            .get_node(node)
-            .and_then(|n| n.attr(LocalName::from(DATA_NAIVI_ID)))
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
+        // Collect every chain node (target first, then ancestors) that has this
+        // kind bound AND a resolvable `data-naivi-id` (KTD3). The frame
+        // `bind_event_v` writes the virtual id there; a missing/unparseable
+        // value skips the node (the guest cannot resolve it). Non-bubbling
+        // kinds (KD5: mouseenter/mouseleave) only take the head — the engine
+        // already prunes scroll/focus/blur/pointerenter/leave/applekeybinding
+        // to `[target]`.
+        let mut chain_ids: Vec<u32> = Vec::new();
+        for node in chain.iter().copied() {
+            if !bindings.get(&node).is_some_and(|kinds| kinds.contains(&kind)) {
+                continue;
+            }
+            let Some(virtual_id) = doc
+                .inner()
+                .get_node(node)
+                .and_then(|n| n.attr(LocalName::from(DATA_NAIVI_ID)))
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            chain_ids.push(virtual_id);
+            if kind.is_non_bubbling() {
+                break;
+            }
+        }
         drop(bindings);
+        if chain_ids.is_empty() {
+            return;
+        }
+        // Chain head (deepest bound node) stays in `node` (existing single-node
+        // semantics); the full ordered chain rides in `chain` (KTD3).
         self.queue.borrow_mut().push_back(NaiviEvent {
-            node: virtual_id,
+            node: chain_ids[0],
+            chain: chain_ids,
             kind,
             client_x,
             client_y,

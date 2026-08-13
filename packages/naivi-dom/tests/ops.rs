@@ -558,6 +558,233 @@ fn detached_checked_false_checkbox_is_unchecked_after_layout() {
     assert_eq!(state(bare), Some(false), "absent checked attribute must be unchecked");
 }
 
+// ---------------------------------------------------------------------------
+// bubbling chain collection (plan 076 U3 / KTD3)
+// ---------------------------------------------------------------------------
+
+/// Click inside a bound inner box nested in a bound outer box: the queued
+/// event carries the full ordered chain `[inner, outer]` (target first, then
+/// ancestors), with `node` still the chain head.
+#[test]
+fn bubbling_click_chain_collects_bound_ancestors() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    // Outer 300x300 box at the origin, bound to `click` under virtual id 1.
+    let outer = ops.create_element_v(1, "div").unwrap();
+    ops.append_child(body, outer);
+    ops.set_style(outer, "position", "absolute");
+    ops.set_style(outer, "left", "0px");
+    ops.set_style(outer, "top", "0px");
+    ops.set_style(outer, "width", "300px");
+    ops.set_style(outer, "height", "300px");
+    ops.bind_event_v(1, NaiviEventKind::Click).unwrap();
+
+    // Inner 100x100 box at (50, 50), bound to `click` under virtual id 2.
+    let inner = ops.create_element_v(2, "div").unwrap();
+    ops.append_child(outer, inner);
+    ops.set_style(inner, "position", "absolute");
+    ops.set_style(inner, "left", "50px");
+    ops.set_style(inner, "top", "50px");
+    ops.set_style(inner, "width", "100px");
+    ops.set_style(inner, "height", "100px");
+    ops.bind_event_v(2, NaiviEventKind::Click).unwrap();
+
+    doc.inner_mut().resolve(0.0);
+
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    doc.set_event_sink(Box::new(RecordingSink(Rc::clone(&recorded))));
+
+    // Click inside the inner box (75, 75).
+    let click = main_button_pointer_event(75.0, 75.0);
+    doc.handle_ui_event(UiEvent::PointerDown(click.clone()));
+    doc.handle_ui_event(UiEvent::PointerUp(click));
+
+    assert!(doc.poll(None), "poll should drain the queued click");
+    let drained = recorded.borrow();
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].node, 2, "node is the chain head (deepest bound node)");
+    assert_eq!(drained[0].chain, vec![2, 1], "chain is target-first, then ancestors");
+    assert_eq!(drained[0].kind, NaiviEventKind::Click);
+}
+
+/// Only the ancestor is bound: the target itself is unbound, but the click
+/// still reaches the ancestor (bubbling semantics).
+#[test]
+fn bubbling_click_reaches_bound_ancestor_only() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    let outer = ops.create_element_v(1, "div").unwrap();
+    ops.append_child(body, outer);
+    ops.set_style(outer, "position", "absolute");
+    ops.set_style(outer, "left", "0px");
+    ops.set_style(outer, "top", "0px");
+    ops.set_style(outer, "width", "300px");
+    ops.set_style(outer, "height", "300px");
+    ops.bind_event_v(1, NaiviEventKind::Click).unwrap();
+
+    // Inner box is NOT bound to anything.
+    let inner = ops.create_element("div");
+    ops.append_child(outer, inner);
+    ops.set_style(inner, "position", "absolute");
+    ops.set_style(inner, "left", "50px");
+    ops.set_style(inner, "top", "50px");
+    ops.set_style(inner, "width", "100px");
+    ops.set_style(inner, "height", "100px");
+
+    doc.inner_mut().resolve(0.0);
+
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    doc.set_event_sink(Box::new(RecordingSink(Rc::clone(&recorded))));
+
+    let click = main_button_pointer_event(75.0, 75.0);
+    doc.handle_ui_event(UiEvent::PointerDown(click.clone()));
+    doc.handle_ui_event(UiEvent::PointerUp(click));
+
+    assert!(doc.poll(None), "poll should drain the queued click");
+    let drained = recorded.borrow();
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].node, 1, "unbound target still bubbles to the bound ancestor");
+    assert_eq!(drained[0].chain, vec![1]);
+}
+
+/// An unbound middle layer is skipped: the chain only contains nodes that are
+/// both bound to the kind and resolvable via `data-naivi-id`.
+#[test]
+fn bubbling_chain_skips_unbound_middle() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    let outer = ops.create_element_v(1, "div").unwrap();
+    ops.append_child(body, outer);
+    ops.set_style(outer, "position", "absolute");
+    ops.set_style(outer, "left", "0px");
+    ops.set_style(outer, "top", "0px");
+    ops.set_style(outer, "width", "300px");
+    ops.set_style(outer, "height", "300px");
+    ops.bind_event_v(1, NaiviEventKind::Click).unwrap();
+
+    // Unbound middle layer.
+    let mid = ops.create_element("div");
+    ops.append_child(outer, mid);
+    ops.set_style(mid, "position", "absolute");
+    ops.set_style(mid, "left", "0px");
+    ops.set_style(mid, "top", "0px");
+    ops.set_style(mid, "width", "200px");
+    ops.set_style(mid, "height", "200px");
+
+    let inner = ops.create_element_v(2, "div").unwrap();
+    ops.append_child(mid, inner);
+    ops.set_style(inner, "position", "absolute");
+    ops.set_style(inner, "left", "50px");
+    ops.set_style(inner, "top", "50px");
+    ops.set_style(inner, "width", "100px");
+    ops.set_style(inner, "height", "100px");
+    ops.bind_event_v(2, NaiviEventKind::Click).unwrap();
+
+    doc.inner_mut().resolve(0.0);
+
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    doc.set_event_sink(Box::new(RecordingSink(Rc::clone(&recorded))));
+
+    let click = main_button_pointer_event(75.0, 75.0);
+    doc.handle_ui_event(UiEvent::PointerDown(click.clone()));
+    doc.handle_ui_event(UiEvent::PointerUp(click));
+
+    assert!(doc.poll(None), "poll should drain the queued click");
+    let drained = recorded.borrow();
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].node, 2);
+    assert_eq!(drained[0].chain, vec![2, 1], "unbound middle layer is skipped");
+}
+
+/// `mouseenter` is naivi-fixed non-bubbling (KD5): even when the engine
+/// delivered an ancestor chain it would only take the head. End-to-end the
+/// engine prunes mouseenter chains to `[target]` (bubbles()==false), so a
+/// hover change queues exactly the hovered node.
+#[test]
+fn mouseenter_queues_only_the_hovered_node() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    let outer = ops.create_element_v(1, "div").unwrap();
+    ops.append_child(body, outer);
+    ops.set_style(outer, "position", "absolute");
+    ops.set_style(outer, "left", "0px");
+    ops.set_style(outer, "top", "0px");
+    ops.set_style(outer, "width", "300px");
+    ops.set_style(outer, "height", "300px");
+    ops.bind_event_v(1, NaiviEventKind::MouseEnter).unwrap();
+
+    let inner = ops.create_element_v(2, "div").unwrap();
+    ops.append_child(outer, inner);
+    ops.set_style(inner, "position", "absolute");
+    ops.set_style(inner, "left", "50px");
+    ops.set_style(inner, "top", "50px");
+    ops.set_style(inner, "width", "100px");
+    ops.set_style(inner, "height", "100px");
+    ops.bind_event_v(2, NaiviEventKind::MouseEnter).unwrap();
+
+    doc.inner_mut().resolve(0.0);
+
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    doc.set_event_sink(Box::new(RecordingSink(Rc::clone(&recorded))));
+
+    // Move the pointer over the inner box: hover changes → mouseenter on the
+    // hovered node only (engine prunes the chain to `[target]`; the naivi
+    // non-bubbling guard would also only take the head).
+    let move_event = main_button_pointer_event(75.0, 75.0);
+    doc.handle_ui_event(UiEvent::PointerMove(move_event));
+
+    assert!(doc.poll(None), "poll should drain the queued mouseenter");
+    let drained = recorded.borrow();
+    // Entering a nested element fires mouseenter on each entered element
+    // separately (outer first, then inner) — and each is NON-bubbling, so its
+    // chain is exactly `[target]` (the inner event never includes the outer).
+    assert_eq!(drained.len(), 2);
+    assert_eq!(drained[0].kind, NaiviEventKind::MouseEnter);
+    assert_eq!(drained[0].node, 1, "outer is entered first");
+    assert_eq!(drained[0].chain, vec![1], "non-bubbling: only the head is collected");
+    assert_eq!(drained[1].kind, NaiviEventKind::MouseEnter);
+    assert_eq!(drained[1].node, 2, "then the inner node");
+    assert_eq!(drained[1].chain, vec![2], "non-bubbling: inner's chain does not include outer");
+}
+
+/// The naivi-fixed non-bubbling set is exactly mouseenter/mouseleave (KD5).
+#[test]
+fn non_bubbling_kind_flag() {
+    assert!(NaiviEventKind::MouseEnter.is_non_bubbling());
+    assert!(NaiviEventKind::MouseLeave.is_non_bubbling());
+    assert!(!NaiviEventKind::Click.is_non_bubbling());
+    assert!(!NaiviEventKind::PointerMove.is_non_bubbling());
+    assert!(!NaiviEventKind::Scroll.is_non_bubbling());
+}
+
 /// Build a raw keyboard event with default modifiers.
 fn key_event(key: Key, code: Code, state: KeyState) -> BlitzKeyEvent {
     BlitzKeyEvent {
