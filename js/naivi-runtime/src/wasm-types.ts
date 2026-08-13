@@ -22,53 +22,26 @@
 //   legacy members for the desktop (rquickjs) FFI channel (U5); the U4 wasm
 //   channel binds them as no-ops.
 
-export type EventType =
-  | 'click'
-  | 'pointerdown'
-  | 'pointerup'
-  | 'pointermove'
-  | 'wheel'
-  | 'contextmenu'
-  | 'mouseenter'
-  | 'mouseleave'
-  | 'dblclick'
-  | 'keydown'
-  | 'keyup'
-  | 'input'
-  // Synthesized (never a wire `u8` kind): the dispatcher emits `change` for
-  // checkbox/radio toggles reported by the engine as `input` events.
-  | 'change';
+// The event-kind wire table and event-type vocabulary live in the SOT package
+// `@naivi/protocol` (the single source of truth — naivi-dom's build.rs parses
+// the same table). This module re-exports them so existing imports stay stable.
+import type {
+  EventType,
+  WireEventType,
+  SynthesizedEventType,
+} from '@naivi/protocol';
+export {
+  EVENT_KINDS,
+  SYNTHESIZED_EVENT_TYPES,
+  eventTypeToKind,
+  kindToEventType,
+} from '@naivi/protocol';
+export type {
+  EventType,
+  WireEventType,
+  SynthesizedEventType,
+} from '@naivi/protocol';
 export type HandlerId = bigint;
-
-/**
- * The `u8` event-kind encoding shared with the Rust host
- * (`NaiviEventKind::ALL` order: click=0 … input=11).
- */
-export const EVENT_KINDS: readonly EventType[] = [
-  'click',
-  'pointerdown',
-  'pointerup',
-  'pointermove',
-  'wheel',
-  'contextmenu',
-  'mouseenter',
-  'mouseleave',
-  'dblclick',
-  'keydown',
-  'keyup',
-  'input',
-] as const;
-
-/** Map an [`EventType`] to its protocol `u8` kind. */
-export function eventTypeToKind(type: EventType): number {
-  const kind = EVENT_KINDS.indexOf(type);
-  return kind === -1 ? 0 : kind;
-}
-
-/** Map a protocol `u8` kind back to an [`EventType`] (defaults to `click`). */
-export function kindToEventType(kind: number): EventType {
-  return EVENT_KINDS[kind] ?? 'click';
-}
 
 /** The engine-neutral event object handed to guest listeners. */
 export interface NaiveDomEvent {

@@ -1,0 +1,19 @@
+{
+  "name": "@naivi/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Single Source of Truth for the naivi bridge protocol — event kinds / wire tables, consumed by the JS runtime (import) and by naivi-dom's build.rs (naive literal-table parse)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}
