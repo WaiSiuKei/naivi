@@ -37,8 +37,8 @@ use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_defaul
 use blitz_traits::events::UiEvent;
 use naivi_dom::ffi::{self, QueuedEvent};
 use naivi_dom::{EventSink, NaiviDocument, NaiviEvent};
-use naivi_guest_quickjs::main_ffi::{self, MainState};
 use naivi_guest_quickjs::QuickJsGuest;
+use naivi_guest_quickjs::main_ffi::{self, MainState};
 
 /// The native event sink: forwards drained naivi events into the QuickJS FFI
 /// queue, which the guest tick delivers to the JS callback as
