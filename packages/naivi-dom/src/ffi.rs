@@ -24,8 +24,9 @@ use std::str::FromStr;
 /// A single event queued for the guest callback.
 #[derive(Clone, Debug)]
 pub struct QueuedEvent {
-    /// The bound node's id (as `u64`; crosses to JS as a `f64` number).
-    pub node: u64,
+    /// The bound node's **virtual id** (JS-assigned u32; crosses to JS as a
+    /// `f64` number). Replaces the old u64 blitz `NodeId` (U6/KTD2).
+    pub node: u32,
     /// The protocol `u8` event kind.
     pub kind: u8,
     /// Client (viewport-relative) coordinates, when present.

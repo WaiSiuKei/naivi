@@ -24,6 +24,7 @@
 
 pub mod document;
 pub mod events;
+pub mod frame;
 pub mod generated;
 pub mod ops;
 
@@ -36,4 +37,5 @@ pub use blitz_dom::DocumentConfig;
 pub use blitz_traits::node_id::NodeId;
 pub use document::NaiviDocument;
 pub use events::{EventSink, NaiviEvent, NaiviEventKind, NaiviEventHandler, NoopEventSink};
-pub use ops::{NaiviOp, OpsCore};
+pub use frame::{DecodedFrame, FrameApplier, FrameDecoder, FrameOp};
+pub use ops::{FRAME_REJECTED, NaiviOp, OpsCore, RejectReason};

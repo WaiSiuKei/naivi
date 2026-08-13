@@ -20,8 +20,35 @@ use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// The name of the attribute written by [`OpsCore::bind_event`].
+/// The name of the attribute written by [`OpsCore::bind_event`] /
+/// [`OpsCore::bind_event_v`].
 pub const DATA_NAIVI_ID: &str = "data-naivi-id";
+
+/// Wire reason code for a rejected frame (whole-frame transaction, KTD3).
+/// Mirrors `FRAME_REJECTED = 0x01` in the `@naivi/protocol` SOT.
+pub const FRAME_REJECTED: u8 = 0x01;
+
+/// Why a frame was rejected (KD8 / R9). Every rejection leaves the DOM
+/// untouched — the whole frame is discarded as one transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectReason {
+    /// An op referenced a virtual id that is not live (never created, or
+    /// already removed / reset).
+    UnknownId,
+    /// A create op reused a virtual id that is already live (guest/JS drift).
+    DuplicateId,
+    /// The frame bytes were malformed (truncated / unknown opcode).
+    MalformedFrame,
+}
+
+impl RejectReason {
+    /// The wire reason byte reported to the guest via `frame_rejected`.
+    pub fn code(self) -> u8 {
+        match self {
+            Self::UnknownId | Self::DuplicateId | Self::MalformedFrame => FRAME_REJECTED,
+        }
+    }
+}
 
 /// Registry mapping node ids to the event kinds bound on them.
 pub type NaiviBindings = FxHashMap<NodeId, Vec<NaiviEventKind>>;
@@ -34,6 +61,10 @@ pub struct OpsCore {
     /// [`NaiviDocument`](crate::document::NaiviDocument) so its event handler
     /// sees bindings made through this core).
     pub bindings: Rc<RefCell<NaiviBindings>>,
+    /// Shared virtual-id map (KTD7): JS-assigned virtual u32 id → blitz
+    /// [`NodeId`]. Shared with [`NaiviDocument`](crate::document::NaiviDocument)
+    /// so the event handler can reverse-map via `data-naivi-id`.
+    pub virtual_ids: Rc<RefCell<FxHashMap<u32, NodeId>>>,
 }
 
 impl OpsCore {
@@ -46,15 +77,34 @@ impl OpsCore {
         Self {
             doc,
             bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            virtual_ids: Rc::new(RefCell::new(FxHashMap::default())),
         }
     }
 
-    /// Create a core sharing the given registry with a document.
-    pub(crate) fn with_bindings(
+    /// Create a core sharing both the binding registry and the virtual-id map
+    /// with a [`NaiviDocument`](crate::document::NaiviDocument) (KTD7).
+    pub(crate) fn with_state(
         doc: Rc<RefCell<BaseDocument>>,
         bindings: Rc<RefCell<NaiviBindings>>,
+        virtual_ids: Rc<RefCell<FxHashMap<u32, NodeId>>>,
     ) -> Self {
-        Self { doc, bindings }
+        Self {
+            doc,
+            bindings,
+            virtual_ids,
+        }
+    }
+
+    // ---- virtual-id helpers (KD3 / KTD7) ----
+
+    /// Look up the blitz id for a live virtual id.
+    pub fn resolve_virtual(&self, id: u32) -> Option<NodeId> {
+        self.virtual_ids.borrow().get(&id).copied()
+    }
+
+    /// Resolve a virtual id, or reject the frame (KTD3).
+    fn require_node(&self, id: u32) -> Result<NodeId, RejectReason> {
+        self.resolve_virtual(id).ok_or(RejectReason::UnknownId)
     }
 
     // ---- tree ----
@@ -229,6 +279,156 @@ impl OpsCore {
             .get(&node_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    // ---- virtual-id ops (U6 frame transport, KD3/KTD7) ----
+    //
+    // Every frame op addresses nodes by the JS-assigned virtual u32 id; these
+    // helpers resolve through the shared map and record create/remove so the
+    // next frame (and the event handler's `data-naivi-id` reverse lookup)
+    // sees the same identity.
+
+    /// Create an element under virtual id `id` and record the mapping.
+    pub fn create_element_v(&mut self, id: u32, tag: &str) -> Result<NodeId, RejectReason> {
+        if self.virtual_ids.borrow().contains_key(&id) {
+            return Err(RejectReason::DuplicateId);
+        }
+        let node = self.create_element(tag);
+        self.virtual_ids.borrow_mut().insert(id, node);
+        Ok(node)
+    }
+
+    /// Create a text node under virtual id `id` and record the mapping.
+    pub fn create_text_node_v(&mut self, id: u32, text: &str) -> Result<NodeId, RejectReason> {
+        if self.virtual_ids.borrow().contains_key(&id) {
+            return Err(RejectReason::DuplicateId);
+        }
+        let node = self.create_text_node(text);
+        self.virtual_ids.borrow_mut().insert(id, node);
+        Ok(node)
+    }
+
+    /// Set text on the node addressed by a virtual id.
+    pub fn set_text_v(&mut self, id: u32, text: &str) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.set_text(node, text);
+        Ok(())
+    }
+
+    /// Set an attribute on the node addressed by a virtual id.
+    pub fn set_attr_v(&mut self, id: u32, name: &str, value: &str) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.set_attr(node, name, value);
+        Ok(())
+    }
+
+    /// Set an inline style on the node addressed by a virtual id.
+    pub fn set_style_v(&mut self, id: u32, name: &str, value: &str) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.set_style(node, name, value);
+        Ok(())
+    }
+
+    /// Append `child` (virtual) under `parent` (virtual).
+    pub fn append_child_v(&mut self, parent: u32, child: u32) -> Result<(), RejectReason> {
+        let parent = self.require_node(parent)?;
+        let child = self.require_node(child)?;
+        self.append_child(parent, child);
+        Ok(())
+    }
+
+    /// Insert `node` (virtual) before `anchor` (virtual).
+    pub fn insert_before_v(&mut self, anchor: u32, node: u32) -> Result<(), RejectReason> {
+        let anchor = self.require_node(anchor)?;
+        let node = self.require_node(node)?;
+        self.insert_before(anchor, node);
+        Ok(())
+    }
+
+    /// Insert `node` (virtual) after `anchor` (virtual).
+    pub fn insert_after_v(&mut self, anchor: u32, node: u32) -> Result<(), RejectReason> {
+        let anchor = self.require_node(anchor)?;
+        let node = self.require_node(node)?;
+        self.insert_after(anchor, node);
+        Ok(())
+    }
+
+    /// Replace `anchor` (virtual) with `node` (virtual).
+    pub fn replace_node_v(&mut self, anchor: u32, node: u32) -> Result<(), RejectReason> {
+        let anchor = self.require_node(anchor)?;
+        let node = self.require_node(node)?;
+        self.replace_node(anchor, node);
+        Ok(())
+    }
+
+    /// Attach a virtual node as a child of the document root (facade body).
+    pub fn attach_root_v(&mut self, node: u32) -> Result<(), RejectReason> {
+        let node = self.require_node(node)?;
+        self.attach_document_root(node);
+        Ok(())
+    }
+
+    /// Remove and drop a virtual node (and its subtree), invalidating its id.
+    pub fn remove_node_v(&mut self, id: u32) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.virtual_ids.borrow_mut().remove(&id);
+        self.remove_node(node);
+        Ok(())
+    }
+
+    /// Bind `kind` on the node addressed by a virtual id.
+    ///
+    /// Writes `data-naivi-id` = the **virtual** id (KTD2: the event handler
+    /// reverse-looks-up the guest node from this attribute at queue time) and
+    /// records the `(node, kind)` binding in the shared registry.
+    pub fn bind_event_v(&mut self, id: u32, kind: NaiviEventKind) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.set_attr(node, DATA_NAIVI_ID, &id.to_string());
+        let mut bindings = self.bindings.borrow_mut();
+        let kinds = bindings.entry(node).or_default();
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+        Ok(())
+    }
+
+    /// Unbind `kind` from the node addressed by a virtual id.
+    pub fn unbind_event_v(&mut self, id: u32, kind: NaiviEventKind) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.unbind_event(node, kind);
+        Ok(())
+    }
+
+    /// Unbind every kind from the node addressed by a virtual id (the wire
+    /// `unbind_event` carries no kind — the guest unbinds the whole node).
+    pub fn unbind_all_v(&mut self, id: u32) -> Result<(), RejectReason> {
+        let node = self.require_node(id)?;
+        self.bindings.borrow_mut().remove(&node);
+        self.clear_attr(node, DATA_NAIVI_ID);
+        Ok(())
+    }
+
+    /// Reset the whole scene (self-heal start, R15): drop every node under the
+    /// document root, clear the virtual-id map and the event-binding registry,
+    /// so the next frame builds from a clean slate.
+    pub fn reset(&mut self) {
+        let mut doc = self.doc.borrow_mut();
+        let root = doc.root_node().id;
+        let children: Vec<NodeId> = doc
+            .get_node(root)
+            .map(|n| n.children.iter().copied().collect())
+            .unwrap_or_default();
+        let bindings = Rc::clone(&self.bindings);
+        {
+            let mut mutr = doc.mutate();
+            for child in children {
+                mutr.remove_and_drop_node_with(child, &mut |dropped| {
+                    bindings.borrow_mut().remove(&dropped);
+                });
+            }
+        }
+        drop(doc);
+        self.virtual_ids.borrow_mut().clear();
     }
 
     // ---- batch ----

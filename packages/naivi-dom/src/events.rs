@@ -1,7 +1,7 @@
 //! Event binding, queueing and sink plumbing for naivi.
 
-use crate::ops::NaiviBindings;
-use blitz_dom::{Document, EventHandler};
+use crate::ops::{DATA_NAIVI_ID, NaiviBindings};
+use blitz_dom::{Document, EventHandler, LocalName};
 use blitz_traits::events::{DomEvent, DomEventData, DomEventKind, EventState};
 use blitz_traits::node_id::NodeId;
 use std::cell::RefCell;
@@ -79,8 +79,11 @@ impl NaiviEventKind {
 /// A single event queued for the naivi guest.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NaiviEvent {
-    /// The node that carried the matching binding.
-    pub node: NodeId,
+    /// The JS-assigned **virtual id** of the node that carried the matching
+    /// binding (reverse-looked-up from the node's `data-naivi-id` attribute at
+    /// queue time, KTD2). `0` when the node has no such attribute (legacy
+    /// per-op binding; the guest cannot resolve it).
+    pub node: u32,
     /// The event kind.
     pub kind: NaiviEventKind,
     /// Client (viewport-relative) coordinates, when the underlying DOM event
@@ -130,7 +133,7 @@ impl EventHandler for NaiviEventHandler {
         &mut self,
         chain: &[NodeId],
         event: &mut DomEvent,
-        _doc: &mut dyn Document,
+        doc: &mut dyn Document,
         _event_state: &mut EventState,
     ) {
         let Some(kind) = NaiviEventKind::from_dom_event(event) else {
@@ -146,9 +149,19 @@ impl EventHandler for NaiviEventHandler {
         else {
             return;
         };
+        // Reverse-look-up the guest's virtual id from the bound node's
+        // `data-naivi-id` attribute (KTD2). The frame `bind_event_v` writes
+        // the virtual id there; a missing/unparseable value yields 0 (the
+        // guest drops the event).
+        let virtual_id = doc
+            .inner()
+            .get_node(node)
+            .and_then(|n| n.attr(LocalName::from(DATA_NAIVI_ID)))
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
         drop(bindings);
         self.queue.borrow_mut().push_back(NaiviEvent {
-            node,
+            node: virtual_id,
             kind,
             client_x,
             client_y,

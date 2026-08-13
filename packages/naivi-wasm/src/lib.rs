@@ -81,7 +81,7 @@ impl EventSink for WasmEventSink {
                 return;
             };
             let args = js_sys::Array::new();
-            args.push(&JsValue::from_f64(event.node.as_u64() as f64));
+            args.push(&JsValue::from_f64(event.node as f64));
             args.push(&JsValue::from(event.kind.to_u8()));
             args.push(&JsValue::from_f64(event.client_x as f64));
             args.push(&JsValue::from_f64(event.client_y as f64));

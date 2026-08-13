@@ -48,7 +48,7 @@ struct QuickJsEventSink;
 impl EventSink for QuickJsEventSink {
     fn on_event(&mut self, event: NaiviEvent) {
         ffi::queue_event(QueuedEvent {
-            node: event.node.as_u64(),
+            node: event.node,
             kind: event.kind.to_u8(),
             x: event.client_x as f64,
             y: event.client_y as f64,

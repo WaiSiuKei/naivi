@@ -439,8 +439,8 @@ fn apply_ops_batch_returns_created_ids() {
 #[test]
 fn handle_ui_event_queues_bound_click_only() {
     let mut doc = NaiviDocument::new(make_base_document());
-    // The ops core shares the document's registry, so bindings made through it
-    // are visible to the document's event handler.
+    // The ops core shares the document's registries, so bindings made through
+    // it are visible to the document's event handler.
     let mut ops = doc.ops_core();
 
     let root = doc.inner.borrow().root_node().id;
@@ -449,18 +449,26 @@ fn handle_ui_event_queues_bound_click_only() {
     let body = ops.create_element("body");
     ops.append_child(html, body);
 
-    // A 100x100 box at the origin, bound to `click`.
-    let bound = ops.create_element("div");
+    // A 100x100 box at the origin, bound to `click` under virtual id 1.
+    let bound = ops.create_element_v(1, "div").unwrap();
     ops.append_child(body, bound);
     ops.set_style(bound, "position", "absolute");
     ops.set_style(bound, "left", "0px");
     ops.set_style(bound, "top", "0px");
     ops.set_style(bound, "width", "100px");
     ops.set_style(bound, "height", "100px");
-    ops.bind_event(bound, NaiviEventKind::Click);
+    ops.bind_event_v(1, NaiviEventKind::Click).unwrap();
+    // The binding writes the VIRTUAL id into data-naivi-id (KTD2).
+    {
+        let doc_ref = doc.inner();
+        assert_eq!(
+            doc_ref.get_node(bound).unwrap().attr(data_naivi_id()),
+            Some("1")
+        );
+    }
 
     // A second 100x100 box at x=200, NOT bound.
-    let unbound = ops.create_element("div");
+    let unbound = ops.create_element_v(2, "div").unwrap();
     ops.append_child(body, unbound);
     ops.set_style(unbound, "position", "absolute");
     ops.set_style(unbound, "left", "200px");
@@ -475,7 +483,7 @@ fn handle_ui_event_queues_bound_click_only() {
     let recorded = Rc::new(RefCell::new(Vec::new()));
     doc.set_event_sink(Box::new(RecordingSink(Rc::clone(&recorded))));
 
-    // Click inside the bound box: the bound node's (node, kind) must be queued.
+    // Click inside the bound box: the bound node's (virtual id, kind) is queued.
     let click = main_button_pointer_event(50.0, 50.0);
     doc.handle_ui_event(UiEvent::PointerDown(click.clone()));
     doc.handle_ui_event(UiEvent::PointerUp(click));
@@ -484,7 +492,7 @@ fn handle_ui_event_queues_bound_click_only() {
     {
         let drained = recorded.borrow();
         assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].node, bound);
+        assert_eq!(drained[0].node, 1, "queued node is the virtual id");
         assert_eq!(drained[0].kind, NaiviEventKind::Click);
         assert_eq!(drained[0].client_x, 50.0);
         assert_eq!(drained[0].client_y, 50.0);
@@ -581,17 +589,18 @@ fn handle_ui_event_queues_bound_keyboard_and_input() {
     let body = ops.create_element("body");
     ops.append_child(html, body);
 
-    // A text input at the origin, bound to the keyboard/input kinds.
-    let input = ops.create_element("input");
+    // A text input at the origin, bound to the keyboard/input kinds under
+    // virtual id 1.
+    let input = ops.create_element_v(1, "input").unwrap();
     ops.append_child(body, input);
     ops.set_style(input, "position", "absolute");
     ops.set_style(input, "left", "0px");
     ops.set_style(input, "top", "0px");
     ops.set_style(input, "width", "100px");
     ops.set_style(input, "height", "20px");
-    ops.bind_event(input, NaiviEventKind::KeyDown);
-    ops.bind_event(input, NaiviEventKind::KeyUp);
-    ops.bind_event(input, NaiviEventKind::Input);
+    ops.bind_event_v(1, NaiviEventKind::KeyDown).unwrap();
+    ops.bind_event_v(1, NaiviEventKind::KeyUp).unwrap();
+    ops.bind_event_v(1, NaiviEventKind::Input).unwrap();
 
     // Lay out (creates the input's text editor) and focus it by clicking inside.
     doc.inner_mut().resolve(0.0);
@@ -625,8 +634,8 @@ fn handle_ui_event_queues_bound_keyboard_and_input() {
         .find(|e| e.kind == NaiviEventKind::Input)
         .expect("Input queued from the text-input default action");
 
-    assert_eq!(keydown.node, input);
-    assert_eq!(keyup.node, input);
+    assert_eq!(keydown.node, 1);
+    assert_eq!(keyup.node, 1);
     assert_eq!(keyup.key, "Enter");
     assert_eq!(keyup.code, "Enter");
     assert_eq!(input_evt.value, "a");
