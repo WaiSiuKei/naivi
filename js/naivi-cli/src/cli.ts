@@ -3,19 +3,19 @@
 // Usage: npx naivi web | npx naivi wasm [--release] | npx naivi desktop [--release]
 
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { C, findRoot } from './compile.ts';
-import { parseCommand, type ParsedCommand } from './command.ts';
+import { parseCommand, TRUNK_PORT, type ParsedCommand } from './command.ts';
 import { validateHostStyles } from './host-style.ts';
-import { DevServer } from './dev-server.ts';
 import { createServer } from 'vite';
 
 const HELP_TEXT = `naivi — Vue Vapor CLI
 
 Usage:
   npx naivi web                 Start dev server with standard Vite (no WASM)
-  npx naivi wasm                Start dev server with naivi WASM renderer
-  npx naivi wasm --release      Build a production static site with the WASM renderer
+  npx naivi wasm                Build the guest + serve the WASM host (trunk, http://localhost:8090)
+  npx naivi wasm --release      Build the guest + the production WASM host into packages/naivi-wasm/dist
   npx naivi desktop             Start the native desktop renderer (QuickJS guest)
   npx naivi desktop --release   Package a macOS .app bundle into release/`;
 
@@ -35,33 +35,72 @@ async function cmdWeb(_root: string, cwd: string, port: number) {
   server.printUrls();
 }
 
-async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
-  if (parsed.release) {
-    await buildWasmSite(root, cwd);
-    return;
+/** PIDs with a listening socket on `port` (empty when free). */
+function listenersOn(port: number): number[] {
+  try {
+    const out = execSync(`lsof -tiTCP:${port} -sTCP:LISTEN`, { encoding: 'utf8' });
+    return out.trim().split(/\s+/).filter(Boolean).map(Number);
+  } catch {
+    return [];
   }
+}
 
-  // Dev: Vite dev server with the wasm-mode marker (__NAIVE_MODE) injected
-  // into the served index.html. The U4 host module is trunk-built, so the
-  // dev flow serves the guest JS only; run `trunk serve` in the sibling
-  // `-wasm` crate for the full host.
-  const server = new DevServer(parsed.port, cwd, parsed.devtools);
-
-  server.onFileChange((filePath: string) => {
-    server.log(`File changed: ${filePath}`);
-    server.broadcast('reload');
-  });
-
-  await server.start();
+/** The command line of `pid` (empty string when the process is gone). */
+function processCommand(pid: number): string {
+  try {
+    return execSync(`ps -p ${pid} -o command=`, { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
 }
 
 /**
- * Build the U4 wasm guest bundle (Vite) and copy it into the trunk crate's
- * `assets/guest/`, ready for `trunk build`.
+ * `naivi wasm` — the ONE command for the full wasm flow.
  *
- * Layout (documented, reproducible): running `naivi wasm --release` in a demo
- * dir `<root>/examples/naivi/<name>` produces
- * `<root>/examples/naivi/<name>-wasm/assets/guest/` containing
+ * 1. Build the demo's guest JS into the SHARED trunk host
+ *    (`packages/naivi-wasm/assets/guest/`).
+ * 2. Build/serve the host — the trunk-built Rust cdylib that actually runs
+ *    the engine. A Vite-only dev server alone renders blank: the guest is
+ *    application content, but the wasm engine + canvas come from the host.
+ *
+ * Dev (`naivi wasm`): `trunk serve --release` on the trunk port (8090 by
+ * default — local nginx owns 8080; `--port` overrides). Any stale trunk host
+ * still holding the port is restarted so the freshly built guest is served.
+ *
+ * Release (`naivi wasm --release`): also `trunk build --release` the host so
+ * `packages/naivi-wasm/dist` is a deployable static site.
+ */
+async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
+  await buildWasmSite(root, cwd);
+
+  const trunkCrateDir = join(root, 'packages', 'naivi-wasm');
+  if (parsed.release) {
+    console.log(C.dim('[naivi] Building wasm host (trunk build --release)...'));
+    execFileSync('trunk', ['build', '--release'], { cwd: trunkCrateDir, stdio: 'inherit' });
+    console.log(C.ok(`Wasm host → ${join(trunkCrateDir, 'dist')}`));
+    return;
+  }
+
+  const port = parsed.port === 3000 ? TRUNK_PORT : parsed.port;
+  const stale = listenersOn(port).filter((pid) => processCommand(pid).includes('trunk'));
+  if (stale.length > 0) {
+    console.log(C.dim(`[naivi] Port ${port} held by a stale trunk host — restarting`));
+    execSync(`kill ${stale.join(' ')}`, { stdio: 'ignore' });
+  }
+  console.log(C.ok(`naivi wasm → http://localhost:${port}`));
+  // Blocking: the trunk host owns the dev server until Ctrl+C.
+  execFileSync('trunk', ['serve', '--release', '--port', String(port)], {
+    cwd: trunkCrateDir,
+    stdio: 'inherit',
+  });
+}
+
+/**
+ * Build the U4 wasm guest bundle (Vite) and copy it into the SHARED trunk
+ * crate's `assets/guest/`, ready for the host to serve.
+ *
+ * Layout (documented, reproducible): running `naivi wasm` (any demo dir) puts
+ * `<root>/packages/naivi-wasm/assets/guest/` containing
  * - `guest.js` — a thin wrapper setting `globalThis.__NAIVE_MODE = "wasm"`,
  *   inlining the U6 author CSS (`globalThis.__NAIVE_CSS`), and importing
  *   `./guest.bundle.js`;
@@ -69,8 +108,9 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
  *   (`inlineDynamicImports`; its runtime wasm import stays a non-literal
  *   dynamic import).
  *
- * The trunk host page (`<name>-wasm/index.html`) references
+ * The trunk host page (`packages/naivi-wasm/index.html`) references
  * `./assets/guest/guest.js`; trunk copies `assets/` verbatim into `dist/`.
+ * The host itself is built/served by `cmdWasm` (trunk build / trunk serve).
  */
 async function buildWasmSite(root: string, cwd: string) {
   const { build } = await import('vite');
@@ -112,7 +152,6 @@ async function buildWasmSite(root: string, cwd: string) {
   cpSync(join(outDir, 'guest.bundle.js'), join(guestDir, 'guest.bundle.js'));
   writeFileSync(join(guestDir, 'guest.js'), makeGuestWrapper(cssText));
   console.log(C.ok(`Guest bundle → ${guestDir}`));
-  console.log(C.dim(`Next: cd ${trunkCrateDir} && trunk build`));
 }
 
 /** The `guest.js` wrapper emitted by `naivi wasm --release` (do not edit). */

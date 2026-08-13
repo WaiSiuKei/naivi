@@ -1,24 +1,27 @@
-# naivi — Vue Vapor AOT frontend on blitz. Mirrors naive/Makefile: the wasm
-# flow is TWO steps: (1) build the demo's guest JS, (2) build/serve the Rust
-# host (trunk). The host is the SHARED `packages/naivi-wasm` cdylib — it
-# serves whichever demo's guest was built last.
+# naivi — Vue Vapor AOT frontend on blitz. Mirrors naive/Makefile: `naivi
+# wasm` is now ONE command (builds the demo's guest JS, then builds/serves the
+# shared Rust host `packages/naivi-wasm` via trunk). The remaining targets are
+# the lower-level building blocks it composes.
 #
 # Usage:
-#   make wasm-guest              # build the default demo's guest (DEMO=todomvc)
-#   make wasm-guest DEMO=hello   # build another demo's guest
-#   make build-host              # trunk-build the Rust wasm host
-#   make serve-host              # trunk serve on :8090 (local nginx owns :8080)
-#   make desktop                 # run the demo in a native winit window
-#   make web                     # plain-Vite browser fallback (no blitz)
-#   make check                   # pnpm typecheck + cargo check
+#   make wasm                     # `naivi wasm` — build guest + serve host (:8090)
+#   make wasm DEMO=hello          # another demo
+#   make build-host               # trunk-build the Rust wasm host
+#   make serve-host               # trunk serve on :8090 (local nginx owns :8080)
+#   make desktop                  # run the demo in a native winit window
+#   make web                      # plain-Vite browser fallback (no blitz)
+#   make check                    # pnpm typecheck + cargo check
 
 DEMO ?= todomvc
 
-.PHONY: wasm-guest build-host serve-host desktop web check
+.PHONY: wasm wasm-guest build-host serve-host desktop web check
 
-# Build the demo's guest JS bundle into the SHARED trunk host's assets/guest.
-# The guest alone is not enough — run `make build-host` / `serve-host` after,
-# since trunk serves it.
+# One command: build the demo's guest into the SHARED host's assets/guest,
+# then serve the host with trunk (blocking). Stale trunk on :8090 is replaced.
+wasm:
+	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/naivi.mjs wasm
+
+# Build only the demo's guest JS bundle (then run `make serve-host`).
 wasm-guest:
 	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/naivi.mjs wasm --release
 

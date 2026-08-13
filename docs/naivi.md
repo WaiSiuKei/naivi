@@ -64,10 +64,8 @@ node ../../../js/naivi-cli/bin/naivi.mjs web
 ### Wasm (blitz in the browser via trunk)
 ```sh
 cd examples/naivi/counter
-node ../../../js/naivi-cli/bin/naivi.mjs wasm --release   # → packages/naivi-wasm/assets/guest/
-cd ../../../packages/naivi-wasm
-npx trunk serve --release --public-url ./ --port 8090
-# open http://localhost:8090
+node ../../../js/naivi-cli/bin/naivi.mjs wasm   # build guest + serve host → http://localhost:8090
+# `--release` instead builds the host into packages/naivi-wasm/dist (no serve)
 ```
 
 ### Native (blitz in a winit window via QuickJS)

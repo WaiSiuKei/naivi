@@ -18,6 +18,8 @@ export interface ParsedCommand {
 }
 
 const DEFAULT_PORT = 3000;
+/** `naivi wasm` serves the trunk host on this port (local nginx owns 8080). */
+export const TRUNK_PORT = 8090;
 const KNOWN_COMMANDS: readonly CliCommand[] = ["web", "wasm", "desktop"];
 
 /** Parse the CLI arguments (argv without the node/script prefix). */
