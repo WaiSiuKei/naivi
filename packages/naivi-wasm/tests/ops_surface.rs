@@ -142,3 +142,95 @@ fn export_surface_ops_via_batch() {
     let doc_ref = doc.inner();
     assert_eq!(doc_ref.get_node(text).unwrap().text_content(), "hi");
 }
+
+// ---------------------------------------------------------------------------
+// U7 frame surface (flush_frame / frame_rejected)
+// ---------------------------------------------------------------------------
+
+/// Encode a frame in the U4 wire format (mirrors the TS FrameWriter).
+fn frame(seq: u32, ops: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&seq.to_le_bytes());
+    out.extend_from_slice(&(ops.len() as u16).to_le_bytes());
+    for op in ops {
+        out.extend_from_slice(op);
+    }
+    out
+}
+
+fn op(code: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = vec![code];
+    out.extend_from_slice(payload);
+    out
+}
+
+fn u32(v: u32) -> Vec<u8> {
+    v.to_le_bytes().to_vec()
+}
+
+fn str16(s: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(s.len() as u16).to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+    out
+}
+
+/// `flush_frame` — the only DOM-mutation wasm export — applies one frame.
+#[test]
+fn flush_frame_surface_applies_a_frame() {
+    use naivi_dom::generated::op;
+    let inner = make_base_document();
+    let mut doc = NaiviDocument::new(inner);
+
+    // Establish the facade body, then a `<p class="lede">hello</p>` under it.
+    doc.flush_frame(&frame(
+        0,
+        &[
+            &op(op::CREATE_ELEMENT, &[u32(100), str16("body")].concat()),
+            &op(op::ATTACH_ROOT, &u32(100)),
+        ],
+    ));
+    doc.flush_frame(&frame(
+        1,
+        &[
+            &op(op::CREATE_ELEMENT, &[u32(1), str16("p")].concat()),
+            &op(op::CREATE_TEXT, &[u32(2), str16("hello")].concat()),
+            &op(op::APPEND_CHILD, &[u32(100), u32(1)].concat()),
+            &op(op::APPEND_CHILD, &[u32(1), u32(2)].concat()),
+            &op(op::SET_ATTR, &[u32(1), str16("class"), str16("lede")].concat()),
+            &op(op::SET_STYLE, &[u32(1), str16("color"), str16("red")].concat()),
+        ],
+    ));
+    assert!(doc.take_frame_rejected().is_empty());
+
+    let doc_ref = doc.inner();
+    let p = doc.ops_core().resolve_virtual(1).expect("virtual 1 mapped");
+    let node = doc_ref.get_node(p).unwrap();
+    assert_eq!(node.attr(local_name!("class")), Some("lede"));
+    assert_eq!(node.children.len(), 1);
+    assert_eq!(
+        doc_ref.get_node(node.children[0]).unwrap().text_content(),
+        "hello"
+    );
+}
+
+/// A rejected frame surfaces `frame_rejected(seq, reason)` and leaves no
+/// partial DOM (whole-frame transaction, KTD3).
+#[test]
+fn flush_frame_surface_rejects_bad_frame() {
+    use naivi_dom::generated::op;
+    let inner = make_base_document();
+    let mut doc = NaiviDocument::new(inner);
+
+    // create a div under an UNKNOWN parent — the whole frame must be dropped.
+    doc.flush_frame(&frame(
+        9,
+        &[
+            &op(op::CREATE_ELEMENT, &[u32(1), str16("div")].concat()),
+            &op(op::APPEND_CHILD, &[u32(99), u32(1)].concat()),
+        ],
+    ));
+    assert_eq!(doc.take_frame_rejected(), vec![(9, 0x01)]);
+    assert!(doc.ops_core().resolve_virtual(1).is_none());
+    assert!(doc.inner().root_node().children.is_empty());
+}
