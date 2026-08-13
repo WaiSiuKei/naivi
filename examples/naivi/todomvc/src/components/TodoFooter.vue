@@ -24,9 +24,13 @@ function setFilter(f: 'all' | 'active' | 'completed') {
       <strong class="font-light">{{ remaining }}</strong> {{ remaining === 1 ? 'item' : 'items' }} left
     </span>
     <ul class="m-0 flex list-none gap-0 p-0">
-      <li><a :data-selected="filter === 'all' ? 'true' : 'false'" class="m-[3px] rounded-[3px] border border-transparent px-[7px] py-[3px] text-inherit no-underline hover:border-[#DB7676] data-[selected=true]:border-[#CE4646]" href="#" @click.prevent="setFilter('all')">All</a></li>
-      <li><a :data-selected="filter === 'active' ? 'true' : 'false'" class="m-[3px] rounded-[3px] border border-transparent px-[7px] py-[3px] text-inherit no-underline hover:border-[#DB7676] data-[selected=true]:border-[#CE4646]" href="#" @click.prevent="setFilter('active')">Active</a></li>
-      <li><a :data-selected="filter === 'completed' ? 'true' : 'false'" class="m-[3px] rounded-[3px] border border-transparent px-[7px] py-[3px] text-inherit no-underline hover:border-[#DB7676] data-[selected=true]:border-[#CE4646]" href="#" @click.prevent="setFilter('completed')">Completed</a></li>
+      <!-- Box styling (border/margin/padding) lives on the <li> (block-level flex
+           item) because blitz treats plain inline <a> as text-only style spans:
+           border/margin/padding on inline elements are not laid out or rendered.
+           The <a> keeps only text styling (color, underline). -->
+      <li :data-selected="filter === 'all' ? 'true' : 'false'" class="m-[3px] list-none rounded-[3px] border border-transparent hover:border-[#DB7676] data-[selected=true]:border-[#CE4646]"><a class="block px-[7px] py-[3px] text-inherit no-underline" href="#" @click.prevent="setFilter('all')">All</a></li>
+      <li :data-selected="filter === 'active' ? 'true' : 'false'" class="m-[3px] list-none rounded-[3px] border border-transparent hover:border-[#DB7676] data-[selected=true]:border-[#CE4646]"><a class="block px-[7px] py-[3px] text-inherit no-underline" href="#" @click.prevent="setFilter('active')">Active</a></li>
+      <li :data-selected="filter === 'completed' ? 'true' : 'false'" class="m-[3px] list-none rounded-[3px] border border-transparent hover:border-[#DB7676] data-[selected=true]:border-[#CE4646]"><a class="block px-[7px] py-[3px] text-inherit no-underline" href="#" @click.prevent="setFilter('completed')">Completed</a></li>
     </ul>
     <button
       class="shrink-0 cursor-pointer leading-[19px] no-underline hover:underline"

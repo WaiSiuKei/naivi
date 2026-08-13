@@ -242,6 +242,54 @@ fn add_stylesheet_class_rule_applies() {
     );
 }
 
+/// Tailwind v4 emits `border-style: var(--tw-border-style)` and registers the
+/// custom property via `@property --tw-border-style { initial-value: solid }`.
+/// If stylo drops the `@property` registration (or ignores its initial value)
+/// the var() is guaranteed-invalid and the border computes to `none` — which
+/// is exactly the wasm symptom where every Tailwind border (filter buttons,
+/// todo separators, footer top border) silently disappears.
+#[test]
+fn registered_property_initial_value_feeds_var() {
+    let (mut ops, body) = make_doc_with_skeleton();
+    let div = ops.create_element("div");
+    ops.append_child(body, div);
+    ops.set_attr(div, "class", "border");
+    ops.set_style(div, "width", "100px");
+    ops.set_style(div, "height", "40px");
+
+    let computed_border_style = |doc: &BaseDocument, id: NodeId| -> String {
+        let node = &doc.tree()[id];
+        let styles = node.primary_styles().expect("div should be styled");
+        format!("{:?}", styles.clone_border_top_style())
+    };
+
+    // Control: before the stylesheet the div has no border style.
+    let before = {
+        let mut doc = ops.doc.borrow_mut();
+        doc.resolve(0.0);
+        computed_border_style(&doc, div)
+    };
+    assert_eq!(
+        before, "None",
+        "control: border-top-style should be None before the stylesheet: {before}"
+    );
+
+    // Tailwind v4's exact pattern: @property registration + var() in .border.
+    ops.add_stylesheet(
+        "@property --tw-border-style { syntax: \"*\"; inherits: false; initial-value: solid; }
+         .border { border-style: var(--tw-border-style); border-width: 1px; }",
+    );
+    let after = {
+        let mut doc = ops.doc.borrow_mut();
+        doc.resolve(0.0);
+        computed_border_style(&doc, div)
+    };
+    assert_eq!(
+        after, "Solid",
+        "registered @property initial-value should feed var(): {after}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // sibling insertion / replacement
 // ---------------------------------------------------------------------------
