@@ -100,7 +100,11 @@ dioxus-cli-config = { version = "0.7.3" }
 dioxus-core-macro = { version = "0.7.3" }
 
 # Taffy + Parley + Fontations
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "d4a2b3bf17ed268e4ea5fc1f5a7c76430ad9c499", default-features = false, features = [
+# rev 97761ff: "Block abs-pos: resolve auto margins against the clamped (used)
+# size (#1096)" — fixes vertical centering of `inset-y-0 + margin:auto` boxes
+# (todomvc destroy button). Only 2 commits ahead of the previous pin (a CI
+# dependabot bump + this fix).
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "97761ff11ceb1607b649a6fd939ffc57f354f595", default-features = false, features = [
     "std",
     "flexbox",
     "grid",

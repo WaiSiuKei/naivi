@@ -1043,9 +1043,11 @@ fn layout_abspos_child(
             // the 'direction' property of the containing block is 'rtl') or 'right' (in case 'direction' is 'ltr') and solve for that value.
             width: {
                 let auto_margin_count = margin.left.is_none() as u8 + margin.right.is_none() as u8;
-                if auto_margin_count == 2
-                    && (style_size.width.is_none() || style_size.width.unwrap() >= free_space.width)
-                {
+                // Equal auto margins only collapse to 0 when that would make
+                // them negative (free space <= 0), never merely because the
+                // box is taller than half the container — otherwise
+                // `inset-y-0 + margin:auto` stops centring (taffy #1096).
+                if auto_margin_count == 2 && free_space.width <= 0.0 {
                     0.0
                 } else if auto_margin_count > 0 {
                     free_space.width / auto_margin_count as f32
@@ -1055,10 +1057,11 @@ fn layout_abspos_child(
             },
             height: {
                 let auto_margin_count = margin.top.is_none() as u8 + margin.bottom.is_none() as u8;
-                if auto_margin_count == 2
-                    && (style_size.height.is_none()
-                        || style_size.height.unwrap() >= free_space.height)
-                {
+                // Equal auto margins only collapse to 0 when that would make
+                // them negative (free space <= 0), never merely because the
+                // box is taller than half the container — otherwise
+                // `inset-y-0 + margin:auto` stops centring (taffy #1096).
+                if auto_margin_count == 2 && free_space.height <= 0.0 {
                     0.0
                 } else if auto_margin_count > 0 {
                     free_space.height / auto_margin_count as f32

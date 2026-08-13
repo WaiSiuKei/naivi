@@ -630,3 +630,71 @@ fn removed_node_id_is_invalid() {
     // Reusing the dropped id is a guest bug — this must panic.
     ops.set_attr(div, "class", "zombie");
 }
+
+// ---------------------------------------------------------------------------
+// abspos auto-margins (todomvc destroy-button centering)
+// ---------------------------------------------------------------------------
+
+/// The todomvc destroy button is `position:absolute; inset-y-0; right:10px;
+/// margin:auto 0; height:40px` inside a `position:relative` (but auto-height)
+/// `li`. CSS2.1 §10.6.4 says the two auto vertical margins must get equal
+/// values — each `(container_height - height) / 2` — so the button is
+/// vertically centered. The engine used to resolve both margins to 0 whenever
+/// `height >= free_space` (i.e. whenever the box was taller than half the
+/// container), pinning the cross to the top of the row instead of centering it.
+#[test]
+fn abspos_auto_margins_center_within_auto_height_container() {
+    let mut doc = NaiviDocument::new(make_base_document());
+    let mut ops = doc.ops_core();
+
+    let root = doc.inner.borrow().root_node().id;
+    let html = ops.create_element("html");
+    ops.append_child(root, html);
+    let body = ops.create_element("body");
+    ops.append_child(html, body);
+
+    // A positioned container whose height is auto (content-driven) — mirrors
+    // the todomvc `li.group.relative`.
+    let container = ops.create_element("div");
+    ops.append_child(body, container);
+    ops.set_style(container, "position", "relative");
+    ops.set_style(container, "width", "400px");
+
+    // In-flow content giving the container an auto height of 60px.
+    let content = ops.create_element("div");
+    ops.append_child(container, content);
+    ops.set_style(content, "height", "60px");
+
+    // The destroy button: absolute, inset-y-0, right 10px, my-auto, 40x40.
+    let button = ops.create_element("button");
+    ops.append_child(container, button);
+    ops.set_style(button, "position", "absolute");
+    ops.set_style(button, "top", "0px");
+    ops.set_style(button, "bottom", "0px");
+    ops.set_style(button, "right", "10px");
+    ops.set_style(button, "margin-top", "auto");
+    ops.set_style(button, "margin-bottom", "auto");
+    ops.set_style(button, "height", "40px");
+    ops.set_style(button, "width", "40px");
+
+    doc.inner_mut().resolve(0.0);
+
+    let doc_ref = doc.inner();
+    let container_rect = doc_ref
+        .get_client_bounding_rect(container)
+        .expect("container should be laid out");
+    let button_rect = doc_ref
+        .get_client_bounding_rect(button)
+        .expect("button should be laid out");
+
+    let offset = button_rect.y - container_rect.y;
+    let expected = (container_rect.height - button_rect.height) / 2.0;
+    assert!(
+        (offset - expected).abs() < 1.0,
+        "button should be vertically centered: container_h={} button_h={} button_y_offset={} expected={}",
+        container_rect.height,
+        button_rect.height,
+        offset,
+        expected
+    );
+}
