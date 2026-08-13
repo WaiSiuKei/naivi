@@ -32,9 +32,9 @@ naivi 的事件 kind 协议目前有三处手写副本靠约定同步：`package
 
 **阶段一 — SOT 协议定义层**
 
-- R1. 协议定义收敛到独立 `js/naivi-protocol` 包内的单一字面量表，包含：事件 kind 表（12 种 wire kind，各带稳定字符串名与 u8 号）、op 表（帧内编号）；`change` 作为合成事件标记（见 R10），不进入 wire 表。
+- R1. 协议定义收敛到独立 `js/naivi-protocol` 包内的单一字面量表，包含：事件 kind 表（12 种 wire kind，各带稳定字符串名与**显式 u8 号——u8 字段为权威来源，位置仅测试不变量**）与 op 表（帧内编号；op 表属阶段二、由 U4 加入）；`change` 作为合成事件标记（见 R10），不进入 wire 表。
 - R2. SOT 表必须是裸字面量（`const X = { … } as const`）：build.rs 用朴素解析读取、不执行 TS；JS 侧正常 `import` 同一份表。表格式变更需要同步更新解析器。
-- R3. Rust 侧由 `naivi-dom` 的 build.rs 在 cargo build 时读取 SOT 表，生成 `NaiviEventKind` 完整枚举与 `to_u8` / `from_u8` / `from_str` / `name` / `ALL`、op 常量；生成物写 `OUT_DIR`、不提交；SOT 文件变更通过 `cargo:rerun-if-changed` 触发重生成。
+- R3. Rust 侧由 `naivi-dom` 的 build.rs 在 cargo build 时读取 SOT 表，生成 `NaiviEventKind` 完整枚举与 `to_u8` / `from_u8` / `from_str` / `name` / `ALL`、op 常量（op 常量属阶段二、随 U4 的 op 表生成）；生成物写 `OUT_DIR`、不提交；SOT 文件变更通过 `cargo:rerun-if-changed` 触发重生成。
 - R4. 删除 `packages/naivi-wasm/src/lib.rs` 的重复 `kind_to_u8` / `u8_to_kind`，wasm 与 native 共享 `naivi-dom` 的生成类型，不再各自维护事件映射。
 - R5. 生成边界：与 blitz `DomEventKind` 的映射（`from_dom_event` / `to_dom_event_kind`）与帧编解码逻辑保持手写，不进入生成范围（TS 无法表达 blitz 的 Rust 类型）。
 
@@ -43,7 +43,7 @@ naivi 的事件 kind 协议目前有三处手写副本靠约定同步：`package
 - R6. DOM 变更按帧批处理：JS 侧 writer 把 op 压进 `Uint8Array`，每帧边界一次 flush；帧格式含帧序号、op 数、op 序列，字符串用长度前缀（参考 blitz-quick 线格式）。
 - R7. 节点 id 所有权切到 JS 虚拟 id（u32，generation + free-list + GC 回收）；Rust 维护 虚拟 id → blitz id 映射，事件回流反查 blitz → 虚拟 id。
 - R8. 事件回流保持逐事件函数回调（`(nodeId, kind, x, y, key, code, value)`），不走帧批处理；只有 DOM 变更按帧传输。事件 kind 仍按 SOT 事件表编码为 u8 作为回调参数。
-- R9. 帧 apply 为整帧事务：先完整解码与校验（id 已创建、parent 存在等），任一步失败整帧丢弃，不留下半改 DOM，不 panic。
+- R9. 帧 apply 为整帧事务：解码时按帧内顺序**单遍前向校验**——id 合法当且仅当已在持久映射中或由本帧更早的 op 创建（同帧 create→append 合法）；任一步失败整帧丢弃，不留下半改 DOM，不 panic。
 - R10. wasm 与 native 双通道使用同一帧格式与同一 SOT；`bind_event` 的通道不对称（wasm u8 / native 字符串）随绑定成为帧内 op 而消亡；合成事件 `change` 保持 JS 侧合成、不进 wire。
 - R11. 行为保真：改造后 counter 与 todomvc 在 wasm 与 native 上的交互行为与改造前一致（正确性为验收门槛）。
 
@@ -55,7 +55,7 @@ naivi 的事件 kind 协议目前有三处手写副本靠约定同步：`package
 **帧拒绝自愈**
 
 - R14. 预防：JS writer 强制 u16 字符串上限，超限在 JS 侧显式报错、绝不产出无法编码的帧；writer 对引用的节点 id 做镜像校验（debug 断言）。
-- R15. 自愈：协议提供 `frame_rejected(seq, reason)` 回传与 `reset` op；帧被拒绝时 JS 发 `reset` 并全量重挂载，Rust 清空整树与 id 映射，两侧重新对齐。
+- R15. 自愈：协议提供 `frame_rejected(seq, reason)` 回传与 `reset` op；帧被拒绝时 JS 清空 writer 缓冲、发 `reset`，Rust 清空整树与 id 映射；JS 重建 facade body 镜像与镜像注册表、重置虚拟 id 分配器（generation 递增）后全量重挂载，两侧重新对齐；带拒绝计数/退避，超限显式报错。
 
 **SOT 扇出结构**
 
@@ -103,12 +103,12 @@ flowchart LR
 - F3. 帧拒绝与自愈
   - **Trigger:** Rust 校验失败拒绝整帧。
   - **Actors:** JS writer、Rust frame 核心。
-  - **Steps:** Rust 回传 `frame_rejected(seq, reason)` → JS 记录并丢弃该帧的镜像期望 → JS 发 `reset` op → Rust 清空整树与映射 → JS 全量重挂载 → 正常帧流恢复。
-  - **Outcome:** 两侧重新对齐，无残留失同步（Covers R15）。
+  - **Steps:** Rust 回传 `frame_rejected(seq, reason)` → JS 记录、清空 writer 缓冲并丢弃该帧的镜像期望 → JS 发 `reset` op → Rust 清空整树与映射 → JS 重建 facade body 镜像与注册表、重置虚拟 id 分配器（generation 递增）→ 全量重挂载 → 正常帧流恢复；带拒绝计数/退避，超限显式报错。
+  - **Outcome:** 两侧重新对齐，无残留失同步；循环可证明终止（Covers R15）。
 
 ### Acceptance Examples
 
-- AE1. 阶段一 SOT 生效（Covers R1、R3、R12）：在 SOT 事件表新增一种 kind，除（若需要）blitz 映射外零手写；`cargo build -p naivi-dom`、`cargo test -p naivi-dom`、`pnpm -r typecheck` 与 `pnpm -r test` 全绿；现有 12 种事件在 wasm 与 native 上行为不变。
+- AE1. 阶段一 SOT 生效（Covers R1、R3、R12）：在 SOT 事件表新增一种 kind（**临时验证用，验证通过后回退，wire 表保持 12 种**），除（若需要）blitz 映射外零手写；`cargo build -p naivi-dom`、`cargo test -p naivi-dom`、`pnpm -r typecheck` 与 `pnpm -r test` 全绿；现有 12 种事件在 wasm 与 native 上行为不变。
 - AE2. 漂移在构造上不可能（Covers R3）：修改 SOT 表中的 u8 编号后不跑任何额外命令，直接 `cargo build -p naivi-dom` 即得到新编号；`target/.../out/` 生成物与表一致。
 - AE3. wasm 重复映射删除（Covers R4）：`packages/naivi-wasm/src/lib.rs` 不再含 `kind_to_u8` / `u8_to_kind`，wasm 事件编码走 `naivi-dom` 生成类型。
 - AE4. 帧批处理行为保真（Covers R6、R7、R11）：counter 与 todomvc 在 wasm（trunk 像素级验证）与 native（合成事件）上，新增 / 删除 / 切换 / 输入等交互与改造前一致。
@@ -159,28 +159,28 @@ flowchart LR
 - KTD1. 帧线格式（仅 DOM 变更方向；参考 blitz-quick 线格式）。（Governs R6、R8）
   - DOM 变更帧（JS→Rust）：`[seq: u32][count: u16][op…]`；每个 op `[opcode: u8][operands]`；字符串 `[len: u16][utf8]`。
   - 事件方向（Rust→JS）不帧化：逐事件回调参数（虚拟 id u32 + kind u8 + x/y + key/code/value 字符串）。
-  - op 表编号由 SOT 表定义（U4 落地）；`reset` 为保留 op。
+  - op 表编号由 SOT 表定义（U4 落地）；`reset` 为保留 op；`add_stylesheet` 为帧内 op——CSS 可超 64KiB，该 op 用 u32 长度前缀（其余 op 用 u16）。
 - KTD2. JS 虚拟 id 模型。（Governs R7）
   - JS 分配 u32 虚拟 id：slot + generation + free-list；`FinalizationRegistry` 与显式 removeNode 双通道回收。
-  - Rust 维护 `HashMap<u32, NodeId>`；`data-naivi-id` 属性存虚拟 id，事件反查直接读命中节点的属性（复用现有机制，无需第二张表）。
+  - Rust 维护 `HashMap<u32, NodeId>`；`data-naivi-id` 属性存虚拟 id。事件反查是**新机制**（该属性今日只写不读）：在 `NaiviEventHandler`（持 `&mut inner`）队列事件时读命中节点属性，把虚拟 id 存入 `NaiviEvent`/`QueuedEvent`（替换 u64 NodeId 字段）；若属性被应用覆盖，回退到 Rust 侧 `NodeId→虚拟id` 表（实施期判定，见 Alternatives）。
   - 事件回调携带虚拟 id；JS 镜像与 `_elByWasmId` 键仍按 id 语义工作（id 值从 blitz id 变为虚拟 id）。
 - KTD3. 整帧事务 + 预防 + 自愈。（Governs R9、R14、R15）
-  - 事务：先完整解码 + 校验（id 已映射、parent 存在、字符串合法），失败整帧丢弃、不 panic。
+  - 事务：单遍前向解码 + 顺序感知校验（id 在持久映射 ∪ 帧内已建集合中即合法；parent 由更早 op 创建即合法；字符串合法），失败整帧丢弃、不 panic。
   - 预防（writer）：u16 字符串超限在 JS 侧显式报错、绝不产出坏帧；引用 id 做镜像断言（debug）。
-  - 自愈：`frame_rejected(seq, reason)` 回传 → JS 发 `reset` op → Rust 清空整树与映射 → JS 全量重挂载。
+  - 自愈：`frame_rejected(seq, reason)` 回传 → JS 清空 writer 缓冲与待处理帧 → 发 `reset` op → Rust 清空整树与映射 → JS 重建 facade 与分配器后全量重挂载；带拒绝计数/退避上限，超限则显式报错而非无限循环。
 - KTD4. build.rs 生成机制。（Governs R3）
-  - `packages/naivi-dom/build.rs` 朴素正则解析 SOT 裸字面量表，输出 `OUT_DIR/protocol_gen.rs`（`NaiviEventKind` 枚举 + `to_u8`/`from_u8`/`from_str`/`name`/`ALL` + op 常量），src 经 include! 接入。
+  - `packages/naivi-dom/build.rs` 朴素正则解析 SOT 裸字面量表，输出 `OUT_DIR/protocol_gen.rs`（阶段一生成 `NaiviEventKind` 枚举 + `to_u8`/`from_u8`/`from_str`/`name`/`ALL`；阶段二随 U4 的 op 表追加 op 常量），src 经 include! 接入。
   - `cargo:rerun-if-changed` 指向 SOT 文件；缺文件/解析失败 → 带文件路径的清晰构建错误。
   - 生成物不提交；review 读 `target/debug/build/naivi-dom-*/out/protocol_gen.rs`。
 - KTD5. 帧驱动（tick 来源）。（Governs R6）
-  - wasm：JS 用浏览器 `requestAnimationFrame`，帧边界 flush。
-  - native：host 每帧（winit vsync）调 guest 暴露的 `__tick()`（运行 rAF 队列 → flush），与 blitz-quick 的宿主驱动模型一致。
+  - wasm：JS 用浏览器 `requestAnimationFrame`，帧边界 flush；flush 须在该视觉帧的输入/命中测试处理前完成（或由 winit rAF 在事件处理前调度）。
+  - native：host 每帧（winit vsync）调 guest 暴露的 `__tick()`——注入一个仅队列的 `requestAnimationFrame` shim + `__tick()`（运行 rAF 队列 → flush writer）。host 在 `DocHandle::poll` 中按序：`pump_jobs()` → `__tick()`（flush）→ `drain_events()` → `guest.drain_events()`；事件处理器产生的重渲染 ops 由下一帧 flush（一帧延迟，记录为已知属性）。
 - KTD6. 事件与拒绝信号交付。（Governs R8）
   - 事件按 KTD1 以逐事件回调交付（复用现有 QueuedEvent → 回调参数路径，仅 id 变虚拟 id）。
   - `frame_rejected(seq, reason)` 作为独立 Rust→JS 回调（`set_frame_rejected_callback`）——它不是 DOM 事件，不进事件回调（OQ3）。
 - KTD7. Rust apply 复用 OpsCore 路径。（Governs R6）
   - decoder/applier 放 `naivi-dom`（引擎中立、双 host 共享），host 只做 FFI 薄适配。
-  - `OpsCore::apply_ops` 已存在批处理路径；`NaiviOp` create 变体增加虚拟 id 字段，apply 时建 blitz 节点并记录 `虚拟id → NodeId` 映射。
+  - `OpsCore::apply_ops` 已存在批处理路径；`NaiviOp` create 变体增加虚拟 id 字段，apply 时建 blitz 节点并记录 `虚拟id → NodeId` 映射。映射放 `NaiviDocument` 为共享 `Rc<RefCell<FxHashMap<u32, NodeId>>>`（与 `bindings` 并列），`ops_core()` 借用它、跨帧持久，`reset` 清空。
 - KTD8. 阶段二整体切换、无双模式。（Governs R10）
   - per-op `WasmExports` 面整体替换为 `flush_frame` + `set_event_callback` + `set_frame_rejected_callback`；无新旧双跑/降级层。
   - `batched-bridge.ts` 是接缝；facade 层（mirror、style stub、事件注册）语义不变，只是 id 从 blitz id 变虚拟 id。
@@ -239,6 +239,7 @@ flowchart LR
 - `ir-loader.ts` 遗留 AOT-IR 路径同样改走 writer（在 U5 范围）。
 - 事件以逐事件回调交付（不经帧路径、不新增握手）；只有 DOM 变更按帧传输。
 - `change` 合成事件保持 JS 侧合成、不进 wire（R10）。
+- naivi-dom 不在本仓库外发布或 vendored：build.rs 对 `js/naivi-protocol` 的跨树依赖被接受（裁剪 checkout / 打包场景需保留 js/ 树）。
 
 ---
 
@@ -262,7 +263,7 @@ flowchart LR
   4. `change` 作为合成事件标记，不进 wire 表。
 - **Patterns to follow:** `js/naivi-runtime/package.json` 的 exports 直指 src 模式；blitz-quick `packages/protocol/src/index.ts` 的裸字面量风格。
 - **Test scenarios:**
-  - 表完整性：12 种 kind 各含字符串名、u8 号，顺序编号 0–11，无重复、无空洞。
+  - 表完整性：12 种 kind 各含字符串名与显式 u8 号（u8 字段为权威，顺序 0–11 仅测试不变量），无重复、无空洞。
   - `change` 标记为合成、不在 wire 编号序列。
   - `eventTypeToKind` / `kindToEventType` 双向映射（未知 kind 默认 `click` 的既有语义）。
   - 表格式可被 U2 的朴素解析器消费（格式断言）。
@@ -290,6 +291,7 @@ flowchart LR
   - 修改 SOT 表编号后重 build，生成物编号跟随（Covers AE2）。
   - 删除/改名 SOT 文件 → `cargo build -p naivi-dom` 报错，错误信息含文件路径。
   - `FromStr` 接受 `"click"` 与 `"onclick"`（trim 语义保留）。
+  - 跨侧漂移守卫（Covers AE2）：同一测试同时跑 JS 消费者与生成 Rust 枚举，断言 u8/name 双向映射一致——镜像 blitz-quick 的 roundtrip 守卫。
 - **Verification:** `cargo build -p naivi-dom` + `cargo test -p naivi-dom` 绿；OUT_DIR 生成物内容与表一致。
 
 #### U3. 接入生成代码 + 删除 wasm 重复映射
@@ -310,7 +312,7 @@ flowchart LR
 - **Test scenarios:**
   - 现有 `ops.rs` 事件测试全绿（枚举语义不变）。
   - wasm `ops_surface.rs` 全绿（不再引用已删函数）。
-  - Covers AE1：在 SOT 加一种 kind → 零手写（除 blitz 映射）→ build/test 全绿。
+  - Covers AE1：在 SOT 加一种临时 kind → 零手写（除 blitz 映射）→ build/test 全绿 → 验证后回退该 kind（wire 表保持 12 种，写进 DoD）。
   - Covers AE2：改 u8 编号 → 直接 build 生效、无额外命令。
   - Covers AE3：`git grep kind_to_u8` 为空。
 - **Verification:** `cargo build -p naivi-dom -p naivi-wasm`、`cargo test -p naivi-dom -p naivi-wasm`、`pnpm -r typecheck && pnpm -r test` 全绿。
@@ -322,12 +324,12 @@ flowchart LR
 - **Requirements:** R1、R6、R10、R14
 - **Dependencies:** U1、U2、U3
 - **Files:**
-  - `js/naivi-protocol/src/index.ts`（修改：加 op 表 + `reset` 标记 + `frame_rejected` 信号）
-  - `js/naivi-protocol/src/writer.ts`（新建：帧 Writer，Uint8Array 累积、u16 长度前缀、op 发射、取帧）
+  - `js/naivi-protocol/src/index.ts`（修改：加 op 表（含 `add_stylesheet`/`reset`）+ `frame_rejected` 信号）
+  - `js/naivi-protocol/src/writer.ts`（新建：帧 Writer，Uint8Array 累积、长度前缀、op 发射、取帧；`add_stylesheet` 用 u32 长度，其余 u16）
   - `packages/naivi-dom/build.rs`（修改：生成 op 常量）
   - `js/naivi-protocol/tests/frame-format.test.ts`（新建）
 - **Approach:**
-  1. SOT 增加：op 表（编号，含 create/attr/style/append/insert/remove/bind/reset 等）、`frame_rejected` 信号定义（KTD1）。
+  1. SOT 增加：op 表（编号，含 create/attr/style/append/insert/remove/bind/reset/**add_stylesheet** 等）、`frame_rejected` 信号定义（KTD1）。
   2. TS Writer：小端、u16 前缀字符串、opcode u8；超 u16 上限抛错而非产出坏帧（R14）。
   3. 帧头 `[seq u32][count u16]`（DOM 变更帧）按 KTD1；事件方向不帧化（KTD1，R8）。
 - **Patterns to follow:** blitz-quick `protocol.rs` 的线格式与 writer 思路；本包裸字面量表风格。
@@ -336,6 +338,7 @@ flowchart LR
   - 帧头 seq/count 正确；空 writer flush 输出空帧或跳过。
   - 超 u16 字符串：writer 抛错、不产出坏帧（Covers R14）。
   - op 常量生成与 SOT 一致。
+  - add_stylesheet op：超 64KiB CSS 用 u32 长度前缀编码、往返正确（Covers 样式保真）。
 - **Verification:** `pnpm -r typecheck && pnpm -r test` 绿；`cargo build -p naivi-dom` 后 OUT_DIR 含 op 常量。
 
 #### U5. JS 桥接层重写：writer + 虚拟 id + flush + 事件分发 + 自愈触发
@@ -355,9 +358,10 @@ flowchart LR
   1. 虚拟 id：u32 槽位 + generation + free-list + `FinalizationRegistry`（KTD2）；`NodeMirror.wasmId` 语义从 blitz id 变虚拟 id。
   2. writer 接入 `batched-bridge.ts` 接缝；所有 per-op 调用改 writer；帧边界 flush（wasm 用浏览器 rAF，native 由 host `__tick()` 驱动，KTD5）。
   3. 事件分发：`set_event_callback` 收到逐事件回调参数 `(nodeId, kind, x, y, key, code, value)` → 按虚拟 id dispatch（原 `dispatchHostEvent` 逻辑保留，输入变虚拟 id，R8）。
-  4. 自愈：`set_frame_rejected_callback((seq, reason))` → 记录 → 发 `reset` op → 全量重挂载（R15）。
+  4. 自愈：`set_frame_rejected_callback((seq, reason))` → 清空 writer 缓冲与待处理帧 → 发 `reset` op → 重建 facade body 镜像与注册表、重置虚拟 id 分配器（generation 递增）→ 全量重挂载（R15、F3）；带拒绝计数/退避，超限显式报错。
   5. u16 上限强制 + debug id 断言（R14）。
   6. `change` 合成逻辑不变（仍在 dispatch 层，不进 wire，R10）。
+  7. `loadCSSClassStyles()` 改走 writer 发 `add_stylesheet` op（不再直调宿主导出）。
 - **Patterns to follow:** blitz-quick `solid-renderer`/`core` 的 writer + 虚拟 id + FinalizationRegistry；现有 `batched-bridge.ts` 的 facade 稳定面。
 - **Test scenarios:**
   - 渲染序列：一次信号变更 → writer 累积 → flush 单帧，op 顺序与逐 op 时代一致。
@@ -365,9 +369,9 @@ flowchart LR
   - 事件回调 → dispatch → `change` 合成（checkbox）与键盘/输入（key/code/value）不变（Covers AE6）。
   - 空帧：无变更不 flush 或 flush 空帧被跳过。
   - 超长字符串：writer 抛错、不产坏帧（Covers R14）。
-  - `frame_rejected` → reset → 重挂载：镜像重建、后续交互正常（Covers AE7）。
+  - `frame_rejected` → reset → 重建 body 镜像/注册表/重置 id 分配器 → 重挂载：镜像重建、后续交互正常、无二次拒绝（Covers AE7）。
   - ir-loader 路径改 writer 后行为不变。
-- **Verification:** `pnpm -r typecheck && pnpm -r test` 全绿（runtime 测试改写为帧断言）；wasm demo 在浏览器跑通（与 U7 联动）。
+- **Verification:** `pnpm -r typecheck && pnpm -r test` 全绿（runtime 测试改写为帧断言，mock 驱动）；wasm/native demo 端到端验证归 U9（依赖 U7/U8 落地）。
 - **Execution note:** 帧格式以 U4 测试向量为准；先写 writer 编码测试再实现桥接。
 
 #### U6. Rust 帧核心：decode/apply/事务/reset/拒绝回传
@@ -377,22 +381,23 @@ flowchart LR
 - **Files:**
   - `packages/naivi-dom/src/frame.rs`（新建：FrameDecoder / FrameApplier / 校验）
   - `packages/naivi-dom/src/ops.rs`（修改：`NaiviOp` create 变体加虚拟 id；新增 `Reset` 变体；apply 记录 `虚拟id→NodeId` 映射）
-  - `packages/naivi-dom/src/document.rs`（修改：reset 支持——清空整树与映射）
+  - `packages/naivi-dom/src/document.rs`（修改：持有 虚拟id→NodeId 共享映射（与 bindings 并列）；reset 支持——清空整树与映射）
   - `packages/naivi-dom/src/ffi.rs`（修改：`flush_frame`/`set_frame_rejected_callback` 入口；事件保持现有 QueuedEvent → 回调路径）
   - `packages/naivi-dom/tests/frame.rs`（新建）
 - **Approach:**
   1. FrameDecoder：`Cursor<&[u8]>` 单遍线性解码（定长 opcode + 长度前缀串，借用零分配），复用 U4 生成的常量。
-  2. 校验 + 事务：apply 前完整校验（id 已映射、parent 存在），失败整帧丢弃、入 `frame_rejected(seq, reason)` 队列、不 panic（KTD3）。
-  3. FrameApplier：按序 apply；create 变体建 blitz 节点并记录 `HashMap<u32, NodeId>`；事件反查用 `data-naivi-id` 属性（KTD2）。
+  2. 校验 + 事务：单遍前向解码 + 顺序感知校验（id 在持久映射 ∪ 帧内已建集合即合法，parent 由更早 op 创建即合法），失败整帧丢弃、入 `frame_rejected(seq, reason)` 队列、不 panic（KTD3）。
+  3. FrameApplier：按序 apply；create 变体建 blitz 节点并记录 `HashMap<u32, NodeId>`（映射放 `NaiviDocument` 共享 Rc，KTD7）；`add_stylesheet` op 调 `add_stylesheet` 注入作者 CSS；事件反查用 `data-naivi-id` 属性（KTD2）。
   4. reset：drop 整树 + 清空映射 + 清事件注册（自愈起点，R15）。
-  5. 事件交付：命中 → 读 `data-naivi-id` 反查虚拟 id → 经现有 QueuedEvent → 逐事件回调参数（R8、KTD6）。
+  5. 事件交付：`NaiviEventHandler`（持 `&mut inner`）队列时读命中节点 `data-naivi-id` 反查虚拟 id → 存入 `QueuedEvent`（替换 u64 NodeId 字段）→ 逐事件回调参数（R8、KTD6）。
 - **Patterns to follow:** blitz-quick `protocol.rs` 的 Reader 与 `applier.rs` 的 apply 结构；现有 `OpsCore` 的 DocumentMutator 用法。
 - **Test scenarios:**
   - 解码往返：U4 测试向量编码的帧解码一致。
   - 整帧事务：非法 id 帧 → 整帧丢弃、DOM 无半改、`frame_rejected` 入队、无 panic（Covers AE5）。
+  - 合法同帧序列：同帧 create→append→bind 的帧被接受（Covers AE5/AE7 的"合法帧"面）。
   - 虚拟 id 映射：create 后映射存在；remove 后失效；复用失效 id → 拒绝。
   - reset：清空整树/映射/事件注册，后续 apply 从零可建。
-  - 事件交付：命中节点 → 逐事件回调参数带虚拟 id 与 key/code/value 正确（R8）。
+  - 事件交付：命中节点 → 逐事件回调参数带虚拟 id 与 key/code/value 正确（R8）；绑定后 apply 的帧事件反查正确。
 - **Verification:** `cargo test -p naivi-dom` 绿（新增 frame 测试）；`cargo check --workspace` 绿。
 - **Execution note:** 以整帧事务与拒绝回传为第一验收点（AE5），先实现事务再补 reset。
 
@@ -407,13 +412,13 @@ flowchart LR
   1. `flush_frame` 作为唯一 DOM 变更入口，内部走 U6 的 decoder/applier。
   2. `WasmEventSink` 保持逐事件回调参数（虚拟 id + kind + x/y + key/code/value）回传 JS 回调（R8）。
   3. `set_frame_rejected_callback` 注册拒绝回调。
-  4. 删除全部 per-op 导出（仅保留 `start`/`flush_frame`/`set_event_callback`/`set_frame_rejected_callback`/`tick`）。
+  4. 删除全部 per-op 导出（仅保留 `start`/`flush_frame`/`set_event_callback`/`set_frame_rejected_callback`/`tick`）；作者 CSS 经帧内 `add_stylesheet` op 注入（U4/U5/U6）。
 - **Patterns to follow:** 现有 wasm host 的 `with_core`/`WasmEventSink` 结构；U6 帧核心。
 - **Test scenarios:**
   - host 级：flush_frame 一帧（create+append+attr）后文档可见（AE4 单测版）。
   - 事件回调：合成 pointer 事件 → 回调收到带虚拟 id 的逐事件参数。
   - 拒绝帧：非法 id → `frame_rejected` 回调触发、无 panic。
-- **Verification:** `cargo test -p naivi-wasm` 绿；`naivi wasm --release` + `trunk serve` 后 demo 可用（与 U9 联动）。
+- **Verification:** `cargo test -p naivi-wasm` 绿；wasm demo 端到端验证归 U9。
 
 #### U8. native 通道切换
 - **Goal:** rquickjs FFI 从 per-op 命名空间改为 `flush_frame` + 逐事件回调 + `frame_rejected`；guest pump/drain 更新。
@@ -427,7 +432,7 @@ flowchart LR
 - **Approach:**
   1. `flush_frame` 成为唯一 DOM 变更 FFI 入口（与 wasm 同形，R10）。
   2. `QuickJsEventSink` 保持逐事件回调参数（虚拟 id）；`drain_events` 按现有 QueuedEvent 路径交付（R8、KTD6）。
-  3. host 每帧调 guest `__tick()`（KTD5）；`bind_event` 字符串→u8 的不对称消亡（绑定成为帧内 op，KTD1/R10）。
+  3. host 每帧在 `DocHandle::poll` 中按序调 `pump_jobs()` → `__tick()`（注入 rAF shim + flush writer）→ `drain_events()` → `guest.drain_events()`（KTD5）；`bind_event` 字符串→u8 的不对称消亡（绑定成为帧内 op，KTD1/R10）。
 - **Patterns to follow:** 现有 `ffi.rs` 的 `Ctx<'js>` 首个参数 + 不内嵌 `Context::with`（防重入）；guest 的 pump/drain 循环。
 - **Test scenarios:**
   - `flush_frame` 一帧在 native 文档中可见。
@@ -448,10 +453,10 @@ flowchart LR
   1. wasm：`naivi wasm --release` + `trunk serve`；Playwright 像素/交互验证（新增/删除/切换/输入、checkbox `change`、过滤器），沿用仓库既有手法。
   2. native：`naivi desktop`；合成事件验证（点击/键盘/输入/checkbox）+ 窗口截图。
   3. 自愈端到端：构造含非法 id 的帧注入 → `frame_rejected` → `reset` → 重挂载 → 后续交互一致（AE7）。
-  4. 性能观察：日志记录每帧 op 数/穿越次数，记录观察值供后续量化（不设门槛，R13）。
+  4. 性能观察（改后侧）：日志记录每帧 op 数/穿越次数，与阶段一改造前基线（见 Verification Contract）对比，为后续量化留存数据（不设门槛，R13）。
 - **Patterns to follow:** 仓库既有 wasm/native 验证手法（repo memory 的 todomvc 像素与合成事件验证记录）。
 - **Test scenarios:**
-  - Covers AE4：counter/todomvc 双通道交互与改造前一致（新增/删除/切换/输入）。
+  - Covers AE4：counter/todomvc 双通道交互与改造前一致（新增/删除/切换/输入），且类选择器样式（class/tag/:hover/:checked）在切换后仍生效（add_stylesheet op 保真）。
   - Covers AE6：checkbox `change` 合成 + 键盘 key/code/value 正确。
   - Covers AE7：注入坏帧 → 自愈 → 后续正常。
   - Covers AE5：整帧事务无半改、无 panic（U6 单测基础上端到端复验）。
@@ -461,7 +466,8 @@ flowchart LR
 
 ## Verification Contract
 
-- **阶段一（U1–U3 每单元）：** `cargo build -p naivi-dom -p naivi-wasm`、`cargo test -p naivi-dom -p naivi-wasm`、`pnpm -r typecheck`、`pnpm -r test` 全绿；`git grep kind_to_u8` 为空（AE3）。
+- **阶段一（U1–U3 每单元）：** `cargo build -p naivi-dom -p naivi-wasm`、`cargo test -p naivi-dom -p naivi-wasm`、`pnpm -r typecheck`、`pnpm -r test` 全绿；`git grep kind_to_u8` 为空（AE3，阶段一收尾验收）；跨侧漂移守卫测试绿（U2，JS 与生成 Rust 枚举同表对账）。
+- **阶段一基线（U3 后、U4 前）：** 记录 counter/todomvc 当前直调路径的 per-op 穿越数与每帧 flush 数，作为阶段二 U9 观察的改前参照（R13）。
 - **阶段二（U4–U9 每单元）：** 同上 + `cargo check --workspace`；U4 后帧格式单测绿；U5 后 runtime 帧测试绿；U6 后 frame 测试绿。
 - **通道验收：** wasm = `naivi wasm --release` + `trunk serve --release --port 8090` + Playwright 像素/交互验证；native = `naivi desktop` + 合成事件 + 截图（含 `caffeinate -u -d` 防息屏）。
 - **CI：** 现有 `naivi-js` job（`pnpm -r typecheck` + `pnpm -r test`）保持绿；构建期生成在 cargo 侧，不改变 CI 流程。
@@ -472,7 +478,7 @@ flowchart LR
 
 - **Global:**
   - R1–R15 全部满足；阶段一（AE1–AE3）与阶段二（AE4–AE7）验收通过。
-  - 事件 kind / op 协议无任何手写同步点（除 R5 的 blitz 映射边界）；加一种事件 kind 只改 SOT 一处。
+  - 事件 kind / op 协议无任何手写同步点（除 R5 的 blitz 映射边界）；加一种事件 kind 只改 SOT 一处；AE1 的临时验证 kind 已回退（wire 表保持 12 种）。
   - counter 与 todomvc 在 wasm 与 native 上行为与改造前一致。
   - 帧拒绝自愈端到端成立；整帧事务无半改、无 panic。
 - **Per-unit:** 各 U 的 Verification 通过；U1–U3 组成阶段一独立交付，先于 U4–U9 合入。
