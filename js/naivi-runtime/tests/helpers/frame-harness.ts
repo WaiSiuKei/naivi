@@ -25,13 +25,37 @@ export type EventCb = (
   key?: string,
   code?: string,
   value?: string,
+  button?: number,
+  buttons?: number,
+  deltaX?: number,
+  deltaY?: number,
+  imeData?: string,
+  chain?: number[],
 ) => void;
+
+/** Extra payload for `fireEvent` (KTD2/KTD3 wire fields). */
+export interface FireEventExtra {
+  chain?: number[];
+  button?: number;
+  buttons?: number;
+  deltaX?: number;
+  deltaY?: number;
+  imeData?: string;
+  x?: number;
+  y?: number;
+  key?: string;
+  code?: string;
+}
 
 export interface MockBridge {
   wasm: WasmExports;
   frames: Uint8Array[];
-  /** Fire a host-dispatched event into the guest's event callback. */
-  fireEvent: (nodeId: number, kind: number, value?: string) => void;
+  /**
+   * Fire a host-dispatched event into the guest's event callback. `extra`
+   * carries the new wire fields (KTD2/KTD3); the base `(nodeId, kind, value)`
+   * shape is unchanged for existing callers.
+   */
+  fireEvent: (nodeId: number, kind: number, value?: string, extra?: FireEventExtra) => void;
   /** Simulate a `frame_rejected(seq, reason)` into the guest's handler. */
   rejectFrame: (seq: number, reason: number) => void;
   rejected: Array<{ seq: number; reason: number }>;
@@ -61,8 +85,22 @@ export function makeMockWasm(): MockBridge {
   return {
     wasm,
     frames,
-    fireEvent: (nodeId, kind, value) =>
-      eventCb?.(nodeId, kind, 0, 0, '', '', value),
+    fireEvent: (nodeId, kind, value, extra) =>
+      eventCb?.(
+        nodeId,
+        kind,
+        extra?.x ?? 0,
+        extra?.y ?? 0,
+        extra?.key ?? '',
+        extra?.code ?? '',
+        value,
+        extra?.button,
+        extra?.buttons,
+        extra?.deltaX,
+        extra?.deltaY,
+        extra?.imeData,
+        extra?.chain,
+      ),
     rejectFrame: (seq, reason) => rejectCb?.(seq, reason),
     rejected,
   };

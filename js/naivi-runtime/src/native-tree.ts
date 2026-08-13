@@ -112,6 +112,14 @@ let _elementResolver: ElementResolver | null = null;
 /** Event types the dispatcher synthesizes locally (no host binding needed). */
 const SYNTHESIZED_EVENT_TYPES = new Set<EventType>(['change']);
 
+/**
+ * Kinds that do **not** bubble in naivi (KD5): only the chain head is
+ * dispatched. `mouseenter`/`mouseleave` are the naivi-fixed non-bubbling set;
+ * the engine already prunes the other non-bubbling kinds (scroll/focus/blur/
+ * pointerenter/pointerleave/applekeybinding) to `[target]` on its side.
+ */
+const NON_BUBBLING_EVENT_TYPES = new Set<EventType>(['mouseenter', 'mouseleave']);
+
 /** Install (or clear) the node-id → element resolver used by event dispatch. */
 export function setEventElementResolver(fn: ElementResolver | null): void {
   _elementResolver = fn;
@@ -415,13 +423,33 @@ export function removeEventListener(handlerId: HandlerId): void {
 
 /**
  * Register the Rust→JS event callback. The host calls it as
- * `(nodeId, kind, x, y, key, code, value)` (per-event, not framed — KD2); we
- * route it to the JS listener registry keyed by virtual id.
+ * `(nodeId, kind, x, y, key, code, value, button, buttons, deltaX, deltaY,
+ * imeData, chain)` (per-event, not framed — KD2; KTD2/KTD3 payload); we route
+ * it to the JS listener registry keyed by virtual id.
  */
 export function registerEventCallback(): void {
-  wasm().set_event_callback((nodeId, kind, x, y, key, code, value) => {
-    dispatchHostEvent(nodeId, kind, x, y, key, code, value);
-  });
+  wasm().set_event_callback(
+    (
+      nodeId,
+      kind,
+      x,
+      y,
+      key,
+      code,
+      value,
+      button,
+      buttons,
+      deltaX,
+      deltaY,
+      imeData,
+      chain,
+    ) => {
+      dispatchHostEvent(
+        nodeId, kind, x, y, key, code, value,
+        button, buttons, deltaX, deltaY, imeData, chain,
+      );
+    },
+  );
 }
 
 /**
@@ -440,10 +468,15 @@ export function registerFrameRejectedHandler(recover: () => void): void {
 }
 
 /**
- * Route a host-dispatched `(nodeId, kind, x, y, key, code, value)` event to
- * registered listeners. For `input` events the facade element's value is
- * synced first (via the element resolver) so `el.value` / `event.target.value`
- * reflect the engine's current text.
+ * Route a host-dispatched event to registered listeners, **bubbling along the
+ * ordered bound chain** (KTD3): target first, then ancestors, halting as soon
+ * as a listener calls `stopPropagation()`. When the host sends no chain (or a
+ * single-element chain) this degrades to the legacy single-node dispatch;
+ * non-bubbling kinds (KD5) only dispatch the chain head.
+ *
+ * For `input` events the facade element's value is synced first (via the
+ * element resolver) so `el.value` / `event.target.value` reflect the engine's
+ * current text.
  */
 export function dispatchHostEvent(
   nodeId: number,
@@ -453,36 +486,75 @@ export function dispatchHostEvent(
   key?: string,
   code?: string,
   value?: string,
+  button?: number,
+  buttons?: number,
+  deltaX?: number,
+  deltaY?: number,
+  imeData?: string,
+  chain?: number[],
 ): void {
   const type = kindToEventType(kind);
-  const byKind = _listeners.get(nodeId);
-  if (!byKind) return;
-  const handlers = byKind.get(type);
-  if (!handlers || handlers.size === 0) return;
-  const target = _elementResolver?.(nodeId, type === 'input' ? value : undefined) ?? null;
-  const event = makeDomEvent(type, x, y, key ?? '', code ?? '', value ?? '', target);
-  for (const cb of [...handlers]) {
-    try {
-      cb(event);
-    } catch (error) {
-      console.error('[naivi] guest event listener threw:', error);
-    }
-  }
+  // Ordered bound chain (target first), or the single node when the host sent
+  // none (legacy shape). Non-bubbling kinds only dispatch the head.
+  const ids =
+    chain && chain.length > 0
+      ? NON_BUBBLING_EVENT_TYPES.has(type)
+        ? [chain[0]]
+        : chain
+      : [nodeId];
 
-  // Checkbox/radio: the engine reports a toggle as an `input` event whose
-  // `value` is the new checked state ("true"/"false") — blitz has no `change`
-  // DOM event. Translate it into a `change` event (browser semantics) so Vue
-  // `v-model` / `@change` handlers fire; the element resolver already synced
-  // `_attrs.checked`, so `event.target.checked` reads the new state.
-  if (type === 'input' && isCheckboxLike(target) && value !== undefined) {
-    const changeHandlers = byKind.get('change');
-    if (changeHandlers && changeHandlers.size > 0) {
-      const changeEvent = makeDomEvent('change', x, y, '', '', value, target);
-      for (const cb of [...changeHandlers]) {
-        try {
-          cb(changeEvent);
-        } catch (error) {
-          console.error('[naivi] guest event listener threw:', error);
+  let stopped = false;
+  for (let i = 0; i < ids.length && !stopped; i++) {
+    const id = ids[i];
+    const byKind = _listeners.get(id);
+    const handlers = byKind?.get(type);
+    if (!handlers || handlers.size === 0) continue;
+    const target =
+      _elementResolver?.(nodeId, type === 'input' ? value : undefined) ?? null;
+    const event = makeDomEvent(
+      type,
+      x,
+      y,
+      key ?? '',
+      code ?? '',
+      value ?? '',
+      target,
+      button ?? 0,
+      buttons ?? 0,
+      deltaX ?? 0,
+      deltaY ?? 0,
+      imeData ?? '',
+    );
+    for (const cb of [...handlers]) {
+      try {
+        cb(event);
+      } catch (error) {
+        console.error('[naivi] guest event listener threw:', error);
+      }
+    }
+    if (event.isPropagationStopped()) {
+      stopped = true;
+      break;
+    }
+
+    // Checkbox/radio: the engine reports a toggle as an `input` event whose
+    // `value` is the new checked state ("true"/"false") — blitz has no
+    // `change` DOM event. Translate it into a `change` event (browser
+    // semantics) so Vue `v-model` / `@change` handlers fire; the element
+    // resolver already synced `_attrs.checked`, so `event.target.checked`
+    // reads the new state. Synthesis happens only at the chain head (target
+    // side, where the checkbox/radio listeners live) — unchanged from the
+    // pre-chain behavior.
+    if (i === 0 && type === 'input' && isCheckboxLike(target) && value !== undefined) {
+      const changeHandlers = byKind?.get('change');
+      if (changeHandlers && changeHandlers.size > 0) {
+        const changeEvent = makeDomEvent('change', x, y, '', '', value, target);
+        for (const cb of [...changeHandlers]) {
+          try {
+            cb(changeEvent);
+          } catch (error) {
+            console.error('[naivi] guest event listener threw:', error);
+          }
         }
       }
     }
@@ -507,7 +579,13 @@ function makeDomEvent(
   code: string,
   value: string,
   target: unknown,
+  button = 0,
+  buttons = 0,
+  deltaX = 0,
+  deltaY = 0,
+  imeData = '',
 ): NaiveDomEvent {
+  let stopped = false;
   return {
     type,
     target,
@@ -517,8 +595,18 @@ function makeDomEvent(
     key,
     code,
     value,
+    button,
+    buttons,
+    deltaX,
+    deltaY,
+    imeData,
     preventDefault() {},
-    stopPropagation() {},
+    stopPropagation() {
+      stopped = true;
+    },
+    isPropagationStopped() {
+      return stopped;
+    },
   };
 }
 

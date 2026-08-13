@@ -55,8 +55,19 @@ export interface NaiveDomEvent {
   code: string;
   /** Full input value for `input` events; `""` otherwise. */
   value: string;
+  /** Mouse button that triggered the event (KTD2); `0` otherwise. */
+  button: number;
+  /** Bitmask of currently-pressed mouse buttons (KTD2); `0` otherwise. */
+  buttons: number;
+  /** Wheel delta (KTD2); `0` otherwise (scroll has no engine delta). */
+  deltaX: number;
+  deltaY: number;
+  /** IME composition commit text (KTD2); `""` otherwise. */
+  imeData: string;
   preventDefault(): void;
   stopPropagation(): void;
+  /** Whether a listener called `stopPropagation()` (naivi-internal). */
+  isPropagationStopped(): boolean;
 }
 
 /** Callback invoked when a Core event is dispatched to a guest listener. */
@@ -66,7 +77,7 @@ export type EventCallback = (event: NaiveDomEvent) => void;
 export interface WasmExports {
   /** Flush one DOM-change frame (bytes) to the host (U5 frame transport). */
   flush_frame(bytes: Uint8Array): void;
-  /** Rust→JS event callback: `(nodeId, kind, x, y, key, code, value) => void`. */
+  /** Rust→JS event callback: `(nodeId, kind, x, y, key, code, value, button, buttons, deltaX, deltaY, imeData, chain?) => void`. */
   set_event_callback(
     cb: (
       nodeId: number,
@@ -76,6 +87,12 @@ export interface WasmExports {
       key?: string,
       code?: string,
       value?: string,
+      button?: number,
+      buttons?: number,
+      deltaX?: number,
+      deltaY?: number,
+      imeData?: string,
+      chain?: number[],
     ) => void,
   ): void;
   /**
