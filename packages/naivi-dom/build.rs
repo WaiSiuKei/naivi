@@ -170,6 +170,21 @@ fn camelize(name: &str) -> String {
         "leave",
         "wheel",
         "input",
+        // plan 076: engine `DomEventKind` 补齐所需的词边界（"in" 必须排在
+        // "input" 之后，否则 input → In+Put）。
+        "cancel",
+        "over",
+        "out",
+        "touch",
+        "start",
+        "end",
+        "press",
+        "in",
+        "apple",
+        "scroll",
+        "focus",
+        "blur",
+        "composition",
     ];
     let mut out = String::new();
     let mut rest = name;

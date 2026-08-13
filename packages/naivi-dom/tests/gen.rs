@@ -12,6 +12,8 @@ use naivi_dom::generated::NaiviEventKind;
 
 /// The SOT table as the JS side sees it (event-type string → explicit u8).
 /// Keep in sync with `js/naivi-protocol/src/index.ts` — this is the drift guard.
+///
+/// plan 076 (event parity): all 34 engine `DomEventKind`s are now on the wire.
 const EXPECTED: &[(&str, u8)] = &[
     ("click", 0),
     ("pointerdown", 1),
@@ -25,6 +27,28 @@ const EXPECTED: &[(&str, u8)] = &[
     ("keydown", 9),
     ("keyup", 10),
     ("input", 11),
+    ("pointercancel", 12),
+    ("pointerenter", 13),
+    ("pointerleave", 14),
+    ("pointerover", 15),
+    ("pointerout", 16),
+    ("mousemove", 17),
+    ("mousedown", 18),
+    ("mouseup", 19),
+    ("mouseover", 20),
+    ("mouseout", 21),
+    ("touchstart", 22),
+    ("touchmove", 23),
+    ("touchend", 24),
+    ("touchcancel", 25),
+    ("scroll", 26),
+    ("keypress", 27),
+    ("composition", 28),
+    ("focus", 29),
+    ("blur", 30),
+    ("focusin", 31),
+    ("focusout", 32),
+    ("applekeybinding", 33),
 ];
 
 #[test]
@@ -49,7 +73,8 @@ fn from_u8_roundtrips_all_kinds() {
     }
     // Unknown kinds are rejected (never exposed to the guest).
     assert_eq!(NaiviEventKind::from_u8(255), None);
-    assert_eq!(NaiviEventKind::from_u8(12), None);
+    assert_eq!(NaiviEventKind::from_u8(34), None);
+    assert_eq!(NaiviEventKind::from_u8(100), None);
 }
 
 #[test]

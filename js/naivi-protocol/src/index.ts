@@ -26,9 +26,13 @@
 /**
  * The event-kind wire table: DOM event-type string → protocol `u8` kind.
  *
- * `click=0 … input=11` — order shared with the Rust host's `NaiviEventKind`.
- * `change` is NOT here: it is synthesized (see `SYNTHESIZED_EVENT_TYPES`) and
- * never travels on the wire.
+ * `click=0 … input=11`（既有 12 种，编号保留），`pointercancel=12 …
+ * applekeybinding=33`（plan 076 补齐引擎 `DomEventKind` 全 34 种；wire 名
+ * `composition` 对应引擎 `Ime`）。顺序与 Rust host 的 `NaiviEventKind` 共享。
+ * `change` 是 NOT here：它是合成事件（见 `SYNTHESIZED_EVENT_TYPES`），不上 wire。
+ *
+ * plan 076: 引擎 `DomEventKind` 补齐（pointer 5 / mouse 5 / touch 4 / scroll /
+ * keypress / composition / focus 4 / applekeybinding）。
  */
 export const EVENT_KINDS = {
   click: 0,
@@ -43,9 +47,31 @@ export const EVENT_KINDS = {
   keydown: 9,
   keyup: 10,
   input: 11,
+  pointercancel: 12,
+  pointerenter: 13,
+  pointerleave: 14,
+  pointerover: 15,
+  pointerout: 16,
+  mousemove: 17,
+  mousedown: 18,
+  mouseup: 19,
+  mouseover: 20,
+  mouseout: 21,
+  touchstart: 22,
+  touchmove: 23,
+  touchend: 24,
+  touchcancel: 25,
+  scroll: 26,
+  keypress: 27,
+  composition: 28,
+  focus: 29,
+  blur: 30,
+  focusin: 31,
+  focusout: 32,
+  applekeybinding: 33,
 } as const;
 
-/** The wire event kinds (12). */
+/** The wire event kinds (34). */
 export type WireEventType = keyof typeof EVENT_KINDS;
 
 /**
