@@ -152,6 +152,18 @@ impl QuickJsGuest {
         self.context.with(|ctx| ffi::drain_events(&ctx))
     }
 
+    /// Run the guest's frame tick (KTD5): invokes `globalThis.__tick` if the
+    /// guest mounted one (the desktop entry installs it as rAF-shim + writer
+    /// flush → `naive.flush_frame`). The host calls this once per frame, after
+    /// `pump_jobs` and before draining events. A missing `__tick` (pre-mount)
+    /// is a no-op; a throwing tick is logged and never fatal.
+    pub fn tick(&self) -> rquickjs::Result<()> {
+        self.context.with(|ctx| {
+            let _: Value = ctx.eval("globalThis.__tick && globalThis.__tick()")?;
+            Ok(())
+        })
+    }
+
     /// Drop the stored callback, drain pending jobs, and run a final GC. Must
     /// run before the Context/Runtime are dropped (KTD7 — Persistents outlive
     /// their runtime otherwise, tripping JS_FreeRuntime's GC-list assert).

@@ -94,10 +94,18 @@ impl Document for DocHandle {
     }
 
     fn poll(&mut self, _task_context: Option<TaskContext>) -> bool {
-        // Advance the guest (mount continuation, Vue re-render microtasks).
-        // Runs outside `ctx.with` (runtime-level pump).
+        // KTD5 frame order: advance the guest (mount continuation, Vue
+        // re-render microtasks) — runs outside `ctx.with` (runtime-level pump).
         if let Ok(guest) = self.guest.try_borrow_mut() {
             guest.pump_jobs();
+        }
+        // Run the guest's frame tick: the injected `globalThis.__tick` flushes
+        // the writer as one flush_frame (whole-frame transaction) and delivers
+        // any frame_rejected to the self-heal callback.
+        if let Ok(guest) = self.guest.try_borrow_mut() {
+            if let Err(error) = guest.tick() {
+                tracing::error!("DocHandle.poll: guest tick failed: {error:?}");
+            }
         }
         // Drain blitz-side events into the FFI queue.
         let changed = self.doc.borrow().drain_events();
