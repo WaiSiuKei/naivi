@@ -244,7 +244,7 @@ export function clearQueuedOps(): void {
 /** Create an element node with a fresh JS-assigned virtual id. */
 export function createElement(tag: string): NodeMirror {
   const id = newId();
-  _writer.createElement(tag);
+  _writer.createElement(id, tag);
   const node: NodeMirror = {
     id,
     type: 1, // Element
@@ -260,7 +260,7 @@ export function createElement(tag: string): NodeMirror {
 /** Create a text node with initial content. */
 export function createTextNode(text: string): NodeMirror {
   const id = newId();
-  _writer.createTextNode(text);
+  _writer.createTextNode(id, text);
   const node: NodeMirror = {
     id,
     type: 3, // Text
@@ -522,7 +522,13 @@ function makeDomEvent(
   };
 }
 
-/** Drop every JS-side listener entry + host binding for a node's virtual id. */
+/**
+ * Drop every JS-side listener entry for a node's virtual id — WITHOUT emitting
+ * an `UnbindEvent` op. Called from `removeNode`: the node is being dropped, so
+ * the host already discards its bindings (and the `data-naivi-id` attribute)
+ * with the node; emitting `UnbindEvent` afterwards would reference an id that
+ * `RemoveNode` invalidated in the same frame and reject the whole frame.
+ */
 function unbindAll(nodeId: number): void {
   _listeners.delete(nodeId);
   for (const [handlerId, entry] of _handlerEntries) {
@@ -530,7 +536,6 @@ function unbindAll(nodeId: number): void {
       _handlerEntries.delete(handlerId);
     }
   }
-  _writer.unbindEvent(nodeId);
 }
 
 // ── Layout & render ─────────────────────────────────────────────────

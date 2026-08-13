@@ -7,7 +7,7 @@
 // per-op FFI calls (KD1/KD3).
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { bindWasm, collectTextNodes } from "../src/native-tree.js";
+import { bindWasm, clearQueuedOps, collectTextNodes } from "../src/native-tree.js";
 import { initNaiveDocument, getNaiveDocument, type NaiveElement } from "../src/naive-dom.js";
 import { flush, queuedOpCount, isBatchPending } from "../src/batched-bridge.js";
 import type { WasmExports } from "../src/wasm-types.js";
@@ -71,8 +71,16 @@ function decodeFrames(frames: Uint8Array[]): CallRecord[] {
     for (let i = 0; i < count; i++) {
       const op = f[off++];
       switch (op) {
-        case 0x01: records.push({ kind: "create_element", tag: str() }); break;
-        case 0x02: records.push({ kind: "create_text_node", text: str() }); break;
+        case 0x01: {
+          const id = u32();
+          records.push({ kind: "create_element", node: id, tag: str() });
+          break;
+        }
+        case 0x02: {
+          const id = u32();
+          records.push({ kind: "create_text_node", node: id, text: str() });
+          break;
+        }
         case 0x03: records.push({ kind: "set_text", node: u32(), text: str() }); break;
         case 0x04: records.push({ kind: "set_attr", node: u32(), name: str(), value: str() }); break;
         case 0x05: records.push({ kind: "set_style", node: u32(), name: str(), value: str() }); break;
@@ -108,6 +116,7 @@ function decodeFrames(frames: Uint8Array[]): CallRecord[] {
 describe("vue-vapor-dom facade (U5 frame protocol)", () => {
   beforeEach(() => {
     initNaiveDocument();
+    clearQueuedOps();
   });
 
   it("routes create/append/style/text into one frame", () => {
@@ -135,6 +144,9 @@ describe("vue-vapor-dom facade (U5 frame protocol)", () => {
   it("gives the facade body viewport-filling UA styles in the first frame", () => {
     const mock = makeMockWasm();
     bindWasm(mock.wasm);
+    // Reinstall so the body's bootstrap ops are queued after the mock bind
+    // (the beforeEach's body ops were cleared for isolation).
+    initNaiveDocument();
     flush();
 
     const calls = decodeFrames(mock.frames);
@@ -272,6 +284,36 @@ describe("vue-vapor-dom facade (U5 frame protocol)", () => {
     // Removing the node must drop it from the registry.
     root.removeChild(text);
     expect(collectTextNodes().some((n) => n.text === "Click Me")).toBe(false);
+  });
+
+  it("removeNode does not emit an UnbindEvent op in the same frame (regression)", () => {
+    const mock = makeMockWasm();
+    bindWasm(mock.wasm);
+
+    const doc = getNaiveDocument()!;
+    const root = doc.createElement("div") as HTMLElement;
+    const old = doc.createTextNode("Count: 0");
+    root.appendChild(old);
+    root.addEventListener("click", () => {});
+
+    // Vue-style text re-render: remove the old text node and insert a new one
+    // (new virtual id) before the next flush — the old node's binding dies
+    // with the node, so no UnbindEvent must follow RemoveNode (it would
+    // reference an id invalidated in the same frame and reject it).
+    root.removeChild(old);
+    const fresh = doc.createTextNode("Count: 1");
+    root.appendChild(fresh);
+    flush();
+
+    const records = decodeFrames(mock.frames);
+    const removes = records.filter((c) => c.kind === "remove_node");
+    expect(removes).toHaveLength(1);
+    // No unbind op for the removed node.
+    expect(records.some((c) => c.kind === "unbind_event")).toBe(false);
+    // The fresh text node landed under the root.
+    expect(
+      records.some((c) => c.kind === "create_text_node" && c.text === "Count: 1"),
+    ).toBe(true);
   });
 });
 

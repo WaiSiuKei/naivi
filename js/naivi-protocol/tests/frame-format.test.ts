@@ -9,21 +9,21 @@ function hex(bytes: Uint8Array): string {
 describe('FrameWriter wire format (KTD1)', () => {
   it('encodes a createElement + appendChild frame with exact bytes', () => {
     const w = new FrameWriter();
-    w.createElement('div');
+    w.createElement(1, 'div');
     w.appendChild(1, 2);
     const frame = w.flush();
-    expect(hex(frame)).toBe('00 00 00 00 02 00 01 03 00 64 69 76 06 01 00 00 00 02 00 00 00');
-    // seq 0, count 2, createElement('div'), appendChild(1,2)
+    expect(hex(frame)).toBe('00 00 00 00 02 00 01 01 00 00 00 03 00 64 69 76 06 01 00 00 00 02 00 00 00');
+    // seq 0, count 2, createElement(id=1, 'div'), appendChild(1,2)
   });
 
   it('increments seq and resets count between flushes', () => {
     const w = new FrameWriter();
     w.reset();
     const first = w.flush();
-    w.createElement('a');
+    w.createElement(1, 'a');
     const second = w.flush();
     expect(hex(first)).toBe('00 00 00 00 01 00 0f'); // seq 0, count 1, reset
-    expect(hex(second)).toBe('01 00 00 00 01 00 01 01 00 61'); // seq 1, count 1, createElement('a')
+    expect(hex(second)).toBe('01 00 00 00 01 00 01 01 00 00 00 01 00 61'); // seq 1, count 1, createElement(id=1,'a')
   });
 
   it('returns an empty buffer when there are no ops (caller skips flush)', () => {

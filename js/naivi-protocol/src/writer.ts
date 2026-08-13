@@ -96,13 +96,15 @@ export class FrameWriter {
 
   // ── ops ────────────────────────────────────────────────────────────────────
 
-  createElement(tag: string): void {
+  createElement(id: number, tag: string): void {
     this.op(OP.CreateElement);
+    this.node(id);
     this.str(tag);
   }
 
-  createTextNode(text: string): void {
+  createTextNode(id: number, text: string): void {
     this.op(OP.CreateText);
+    this.node(id);
     this.str(text);
   }
 

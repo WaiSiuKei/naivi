@@ -92,8 +92,16 @@ export function decodeFrames(frames: Uint8Array[]): CallRecord[] {
     for (let i = 0; i < count; i++) {
       const op = f[off++];
       switch (op) {
-        case 0x01: records.push({ kind: 'create_element', tag: str() }); break;
-        case 0x02: records.push({ kind: 'create_text_node', text: str() }); break;
+        case 0x01: {
+          const id = u32();
+          records.push({ kind: 'create_element', node: id, tag: str() });
+          break;
+        }
+        case 0x02: {
+          const id = u32();
+          records.push({ kind: 'create_text_node', node: id, text: str() });
+          break;
+        }
         case 0x03: records.push({ kind: 'set_text', node: u32(), text: str() }); break;
         case 0x04: records.push({ kind: 'set_attr', node: u32(), name: str(), value: str() }); break;
         case 0x05: records.push({ kind: 'set_style', node: u32(), name: str(), value: str() }); break;
