@@ -12,17 +12,17 @@ import {
 const BARE_LITERAL_ENTRY = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(0x[0-9a-fA-F]+|-?\d+)\s*,?\s*$/;
 
 describe('EVENT_KINDS wire table', () => {
-  it('has exactly 12 kinds with explicit authoritative u8 numbers 0..11, no gaps or duplicates', () => {
+  it('has exactly 34 kinds with explicit authoritative u8 numbers 0..33, no gaps or duplicates', () => {
     const entries = Object.entries(EVENT_KINDS);
-    expect(entries).toHaveLength(12);
+    expect(entries).toHaveLength(34);
     const values = entries.map(([, k]) => k);
     // Explicit numbers are the authority; order is only a test-time invariant.
-    expect(new Set(values).size).toBe(12);
-    for (let i = 0; i < 12; i++) {
+    expect(new Set(values).size).toBe(34);
+    for (let i = 0; i < 34; i++) {
       expect(values).toContain(i);
     }
     // The values match the array order too (current table is contiguous).
-    expect(values).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(values).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]);
   });
 
   it('is parseable by the build.rs naive literal-table parser (R2 format contract)', () => {

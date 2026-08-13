@@ -72,7 +72,7 @@ describe('SOT op table', () => {
   });
 
   it('exposes the event-kind table consistently (eventTypeToKind/kindToEventType)', () => {
-    expect(Object.keys(EVENT_KINDS)).toHaveLength(12);
+    expect(Object.keys(EVENT_KINDS)).toHaveLength(34);
     expect(kindToEventType(11)).toBe('input');
     expect(kindToEventType(0)).toBe('click');
   });
