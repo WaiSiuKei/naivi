@@ -11,6 +11,7 @@
 /apps/wpt/output
 /sites
 .blitz-cache
+/dist
 
 # pnpm workspace (naivi toolchain + demos)
 /node_modules
