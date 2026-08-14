@@ -77,55 +77,28 @@ pub(crate) fn stroke_text<'a>(
     for line in lines {
         for item in line.items() {
             if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
-                // macOS CoreText backend: runs carry a self-describing native
-                // font key. Draw them with native (color-aware) rasterization;
-                // the anyrender monochrome path below handles everything else.
+                // macOS CoreText backend: runs carrying a self-describing native
+                // font key draw natively first (color-aware, e.g. Apple Color
+                // Emoji). On macOS EVERY run is shaped by CoreText and carries a
+                // native font (the harfrust path is unreachable there), so this
+                // branch always handles runs on macOS; the anyrender monochrome
+                // path handles everything else.
                 #[cfg(target_os = "macos")]
                 if draw_glyph_run_native(scene, &glyph_run, doc, transform) {
                     continue;
                 }
-                let run = glyph_run.run();
-                let font = run.font();
-                let font_size = run.font_size();
-                let style = glyph_run.style();
-                let synthesis = run.synthesis();
-                let glyph_xform = synthesis
-                    .skew()
-                    .map(|angle| Affine::skew(angle.to_radians().tan() as f64, 0.0));
-
-                // Styles
-                let styles = doc
-                    .get_node(style.brush.id)
-                    .unwrap()
-                    .primary_styles()
-                    .unwrap();
-                let itext_styles = styles.get_inherited_text();
-                let text_color = itext_styles.color.as_color_color();
-
-                let embolden = if FONT_EMBOLDEN_ENABLED {
-                    let fs = font_size as f64 / scale;
-                    kurbo::Vec2::new((0.015125 * fs).min(0.3), (0.0121 * fs).min(0.3))
-                } else {
-                    kurbo::Vec2::default()
-                };
-
-                scene.draw_glyphs(
-                    font,
-                    font_size,
-                    !FONT_EMBOLDEN_ENABLED, // hint
-                    run.normalized_coords(),
-                    embolden,
-                    Fill::NonZero,
-                    &anyrender::Paint::from(text_color),
-                    1.0, // alpha
-                    transform,
-                    glyph_xform,
-                    glyph_run.positioned_glyphs().map(|glyph| anyrender::Glyph {
-                        id: glyph.id as _,
-                        x: glyph.x,
-                        y: glyph.y,
-                    }),
-                );
+                // COLRv1 color glyphs (e.g. Noto Color Emoji loaded through the
+                // on-demand slice loader on wasm): rasterize color glyphs to
+                // premultiplied RGBA bitmaps via tiny-skia and draw them as
+                // images. Mixed runs keep their non-color glyphs on the
+                // monochrome path. Returns true when the run contained any
+                // color glyph (U7). Non-macOS only: CoreText already rasterizes
+                // color natively, so this Rust path is never reached there.
+                #[cfg(not(target_os = "macos"))]
+                if crate::text_color::draw_glyph_run_color(scene, &glyph_run, doc, transform, scale) {
+                    continue;
+                }
+                draw_glyphs_mono(scene, &glyph_run, doc, transform, scale, glyph_run.positioned_glyphs());
 
                 draw_text_decorations(scene, &glyph_run, doc, transform);
             }
@@ -133,9 +106,69 @@ pub(crate) fn stroke_text<'a>(
     }
 }
 
+/// Draw a subset of a glyph run's glyphs through the anyrender monochrome
+/// path. Shared by the plain fallback in [`stroke_text`] and the COLR
+/// mixed-run path in `text_color.rs` (U7).
+pub(crate) fn draw_glyphs_mono<'a>(
+    scene: &mut impl PaintScene,
+    glyph_run: &GlyphRun<'a, TextBrush>,
+    doc: &BaseDocument,
+    transform: Affine,
+    scale: f64,
+    glyphs: impl Iterator<Item = parley::layout::Glyph>,
+) {
+    let run = glyph_run.run();
+    let font = run.font();
+    let font_size = run.font_size();
+    let style = glyph_run.style();
+    let synthesis = run.synthesis();
+    let glyph_xform = synthesis
+        .skew()
+        .map(|angle| Affine::skew(angle.to_radians().tan() as f64, 0.0));
+
+    // Styles
+    let styles = doc
+        .get_node(style.brush.id)
+        .unwrap()
+        .primary_styles()
+        .unwrap();
+    let itext_styles = styles.get_inherited_text();
+    let text_color = itext_styles.color.as_color_color();
+
+    let embolden = if FONT_EMBOLDEN_ENABLED {
+        let fs = font_size as f64 / scale;
+        kurbo::Vec2::new((0.015125 * fs).min(0.3), (0.0121 * fs).min(0.3))
+    } else {
+        kurbo::Vec2::default()
+    };
+
+    // Collect so `draw_glyphs` receives a `Clone` iterator (required by the
+    // anyrender signature) regardless of what the caller passed.
+    let glyphs: Vec<parley::layout::Glyph> = glyphs.collect();
+
+    scene.draw_glyphs(
+        font,
+        font_size,
+        !FONT_EMBOLDEN_ENABLED, // hint
+        run.normalized_coords(),
+        embolden,
+        Fill::NonZero,
+        &anyrender::Paint::from(text_color),
+        1.0, // alpha
+        transform,
+        glyph_xform,
+        glyphs.iter().map(|glyph| anyrender::Glyph {
+            id: glyph.id as _,
+            x: glyph.x,
+            y: glyph.y,
+        }),
+    );
+}
+
 /// Draw the underline / strikethrough of a glyph run, using the run's font
-/// metrics for the line offsets and thicknesses.
-fn draw_text_decorations<'a>(
+/// metrics for the line offsets and thicknesses. Shared with the COLR color
+/// path (`text_color.rs`).
+pub(crate) fn draw_text_decorations<'a>(
     scene: &mut impl PaintScene,
     glyph_run: &GlyphRun<'a, TextBrush>,
     doc: &BaseDocument,

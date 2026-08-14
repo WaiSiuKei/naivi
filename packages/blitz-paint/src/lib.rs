@@ -12,6 +12,14 @@ mod layers;
 mod render;
 mod sizing;
 mod text;
+/// COLRv1 color glyph rasterization via tiny-skia (U7).
+///
+/// Non-CoreText backends only (wasm): on macOS every run is shaped and
+/// rasterized natively by CoreText (the harfrust path is unreachable), so
+/// this module is compiled there only for its unit tests.
+#[cfg(any(not(target_os = "macos"), test))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod text_color;
 
 use std::collections::HashMap;
 
