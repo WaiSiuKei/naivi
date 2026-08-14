@@ -14,7 +14,7 @@
     "node": ">=24"
   },
   "bin": {
-    "naivi": "./bin/naivi.mjs"
+    "nv": "./bin/nv.mjs"
   },
   "scripts": {
     "build": "tsc",

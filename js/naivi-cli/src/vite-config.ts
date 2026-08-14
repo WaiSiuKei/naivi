@@ -189,7 +189,7 @@ export async function resolveWebViteConfig(
   cwd: string,
   port: number,
 ): Promise<InlineConfig> {
-  const page = await loadPageViteConfig(cwd, "naivi web");
+  const page = await loadPageViteConfig(cwd, "nv web");
   const userConfig = applyNaiviServerDefaults(cwd, page.vite ?? {});
   return {
     root: cwd,

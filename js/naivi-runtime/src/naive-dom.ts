@@ -146,8 +146,8 @@ function childIndex(parent: NaiveNode, child: NaiveNode): number {
  *
  * The CLI compiles SFC `<style>` blocks (and project CSS) to CSS text and
  * delivers it as `globalThis.__NAIVE_CSS`:
- * - wasm channel: `naivi wasm --release` inlines it into `guest.js`;
- * - native channel: `naivi desktop` passes `node_modules/.naive/styles.css`
+ * - wasm channel: `nv wasm --release` inlines it into `guest.js`;
+ * - native channel: `nv desktop` passes `node_modules/.naive/styles.css`
  *   and the host evals `__NAIVE_CSS` before the guest bundle.
  *
  * The text is queued as an `AddStylesheet` frame op (the writer flushes it

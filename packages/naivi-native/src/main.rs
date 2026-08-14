@@ -5,7 +5,7 @@
 //! renderer in a native window. The demo is selected by the CLI; there are no
 //! per-demo host crates.
 //!
-//! Usage (main/page split, primary — `naivi desktop`):
+//! Usage (main/page split, primary — `nv desktop`):
 //! `naivi-native <main-bundle.js> <page-bundle.js> [styles.css] [project-dir]`
 //!
 //! The main bundle is the Vite-built desktop MAIN entry (the CLI aliases

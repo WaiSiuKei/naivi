@@ -23,29 +23,29 @@ naivi-js-check:
 # (packages/naivi-wasm/assets/guest), then:
 # cd packages/naivi-wasm && trunk serve --release --port 8090
 naivi-counter-wasm:
-  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/naivi.mjs wasm --release
+  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/nv.mjs wasm --release
 
 # Run the counter in a native winit window (shared rquickjs guest host)
 naivi-counter-desktop:
-  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/naivi.mjs desktop
+  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/nv.mjs desktop
 
 # Serve the counter in a plain browser (standard Vite, no WASM)
 naivi-counter-web:
-  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/naivi.mjs web
+  cd examples/naivi/counter && node ../../../js/naivi-cli/bin/nv.mjs web
 
 # Build the todomvc wasm guest into the SHARED trunk host
 # (packages/naivi-wasm/assets/guest), then:
 # cd packages/naivi-wasm && trunk serve --release --port 8090
 naivi-todomvc-wasm:
-  cd examples/naivi/todomvc && node ../../../js/naivi-cli/bin/naivi.mjs wasm --release
+  cd examples/naivi/todomvc && node ../../../js/naivi-cli/bin/nv.mjs wasm --release
 
 # Run the todomvc in a native winit window (shared rquickjs guest host)
 naivi-todomvc-desktop:
-  cd examples/naivi/todomvc && node ../../../js/naivi-cli/bin/naivi.mjs desktop
+  cd examples/naivi/todomvc && node ../../../js/naivi-cli/bin/nv.mjs desktop
 
 # Serve the todomvc in a plain browser (standard Vite, no WASM)
 naivi-todomvc-web:
-  cd examples/naivi/todomvc && node ../../../js/naivi-cli/bin/naivi.mjs web
+  cd examples/naivi/todomvc && node ../../../js/naivi-cli/bin/nv.mjs web
 
 ## WPT test runner
 

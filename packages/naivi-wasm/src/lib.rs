@@ -9,7 +9,7 @@
 //! [`BlitzApplication`] (winit + VelloHybrid renderer on the `#blitz-target`
 //! canvas).
 //!
-//! This is the SHARED wasm host: `naivi wasm --release` (in any
+//! This is the SHARED wasm host: `nv wasm --release` (in any
 //! `examples/naivi/<demo>`) drops the demo's guest bundle into this crate's
 //! `assets/guest/`, and `trunk serve` (here) runs it. There are no per-demo
 //! host crates.

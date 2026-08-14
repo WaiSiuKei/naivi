@@ -1,4 +1,4 @@
-// naivi desktop main entry — mirrors naive's todomvc demo (`app/main.ts`).
+// nv desktop main entry — mirrors naive's todomvc demo (`app/main.ts`).
 // The CLI bundles this as `main-bundle.js` with `@naivi/runtime` aliased to
 // the desktop-main API, so `app.whenReady()` + `NaiveWindow` drive window
 // creation and page loading (`loadFile('index.html')` evals the page bundle).

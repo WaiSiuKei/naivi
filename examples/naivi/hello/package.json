@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "naivi hello/counter demo — runs through `naivi web` (pure Vite passthrough, standard Vue Vapor fallback, no wasm).",
+  "description": "naivi hello/counter demo — runs through `nv web` (pure Vite passthrough, standard Vue Vapor fallback, no wasm).",
   "scripts": {
-    "dev": "naivi web"
+    "dev": "nv web"
   },
   "engines": {
     "node": ">=24"

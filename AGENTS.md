@@ -1,6 +1,6 @@
 # AGENTS.md
 
-blitz is a Rust browser engine; **naivi** is a Vue Vapor (AOT) frontend for it — TS toolchain in `js/naivi-*`, shared Rust hosts in `packages/naivi-wasm` + `packages/naivi-native`. See `docs/naivi.md` for architecture and per-command usage (`naivi web` / `wasm` / `desktop`).
+blitz is a Rust browser engine; **naivi** is a Vue Vapor (AOT) frontend for it — TS toolchain in `js/naivi-*`, shared Rust hosts in `packages/naivi-wasm` + `packages/naivi-native`. See `docs/naivi.md` for architecture and per-command usage (`nv web` / `wasm` / `desktop`).
 
 ## naivi guest debug log forwarding
 

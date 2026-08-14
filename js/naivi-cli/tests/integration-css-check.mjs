@@ -4,10 +4,10 @@
 // CLI exercise captured only in commit prose; this script makes the plan's
 // U3 scenarios repeatable:
 //   1. a fixture copy of the counter demo with an injected unsupported
-//      declaration (`float: left`) fails `naivi wasm --release` (report +
+//      declaration (`float: left`) fails `nv wasm --release` (report +
 //      non-zero exit, no Vite build)
-//   2. the same fixture fails `naivi desktop` before any window/guest launch
-//   3. the clean counter demo passes `naivi wasm --release` (exit 0)
+//   2. the same fixture fails `nv desktop` before any window/guest launch
+//   3. the clean counter demo passes `nv wasm --release` (exit 0)
 // The fixture is a same-depth copy inside the repo (findRoot walks up from
 // cwd; the copied node_modules symlinks stay valid) and is removed on exit.
 //
@@ -24,7 +24,7 @@ const pkgDir = join(testsDir, '..'); // js/naivi-cli
 const root = join(pkgDir, '..', '..'); // repo root
 const demoDir = join(root, 'examples', 'naivi', 'counter');
 const fixtureDir = join(root, 'examples', 'naivi', 'css-check-fixture');
-const cli = join(pkgDir, 'bin', 'naivi.mjs');
+const cli = join(pkgDir, 'bin', 'nv.mjs');
 
 /** Run the naivi CLI in `cwd`; returns { status, out }. */
 function run(cwd, ...args) {
@@ -49,13 +49,13 @@ try {
   cpSync(demoDir, fixtureDir, { recursive: true });
   writeFileSync(join(fixtureDir, 'src', 'main.css'), '.x { float: left; }\n');
 
-  console.log('== naivi wasm --release on a fixture with an unsupported hit ==');
+  console.log('== nv wasm --release on a fixture with an unsupported hit ==');
   let r = run(fixtureDir, 'wasm', '--release');
   check(r.status !== 0, 'non-zero exit', `exit=${r.status}`);
   check(r.out.includes('KC1101'), 'report contains KC1101', r.out);
   check(!r.out.includes('✓ built in'), 'Vite build did not run (fail-fast)', r.out);
 
-  console.log('== naivi desktop on the same fixture (fails before any window) ==');
+  console.log('== nv desktop on the same fixture (fails before any window) ==');
   r = run(fixtureDir, 'desktop');
   check(r.status !== 0, 'non-zero exit', `exit=${r.status}`);
   check(r.out.includes('KC1101'), 'report contains KC1101', r.out);
@@ -64,7 +64,7 @@ try {
   rmSync(fixtureDir, { recursive: true, force: true });
 }
 
-console.log('== naivi wasm --release on the clean counter demo ==');
+console.log('== nv wasm --release on the clean counter demo ==');
 const r = run(demoDir, 'wasm', '--release');
 check(r.status === 0, 'zero exit', `exit=${r.status}`);
 check(r.out.includes('100% supported'), 'check line', r.out);

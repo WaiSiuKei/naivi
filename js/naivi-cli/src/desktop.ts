@@ -1,4 +1,4 @@
-// Desktop pipeline for `naivi desktop` (plan 072, U5; main/page split).
+// Desktop pipeline for `nv desktop` (plan 072, U5; main/page split).
 //
 // 1. compileIfNeeded → `node_modules/.naive/styles.css` (shared pipeline).
 // 2. Vite: bundle the MAIN entry (from `naive.config.ts` `main`) into
@@ -98,7 +98,7 @@ export async function buildDesktopBundle(root: string, cwd: string, entry: strin
   const desktopEntry = join(runtimeSrc, 'desktop-entry.ts');
   const outfile = join(cwd, 'node_modules', '.naive', 'page-bundle.js');
 
-  const page = await loadPageViteConfig(cwd, 'naivi desktop');
+  const page = await loadPageViteConfig(cwd, 'nv desktop');
   const config = resolveDesktopViteConfig({
     cwd,
     pageViteConfig: page.vite,
@@ -128,7 +128,7 @@ export async function buildDesktopMainBundle(
   const desktopMain = join(runtimeSrc, 'desktop-main.ts');
   const outfile = join(cwd, 'node_modules', '.naive', 'main-bundle.js');
 
-  const page = await loadPageViteConfig(cwd, 'naivi desktop');
+  const page = await loadPageViteConfig(cwd, 'nv desktop');
   const config = resolveDesktopViteConfig({
     cwd,
     pageViteConfig: page.vite,
@@ -148,7 +148,7 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
   // R11: main is mandatory for desktop (requireMain); pages with an
   // index.html page are required too, matching wasm/web. `--release`
   // packaging is deferred to U7.
-  const commandLabel = release ? 'naivi desktop --release' : 'naivi desktop';
+  const commandLabel = release ? 'nv desktop --release' : 'nv desktop';
   const config = await loadNaiveConfig(cwd, {
     requireMain: true,
     requirePages: true,
@@ -158,7 +158,7 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
 
   if (release) {
     throw new Error(
-      'naivi desktop --release: not implemented in U5 (macOS .app packaging lands in U7)',
+      'nv desktop --release: not implemented in U5 (macOS .app packaging lands in U7)',
     );
   }
 
@@ -198,7 +198,7 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
   // The native host is a SINGLE shared generic crate (`naivi-native`): it
   // evals the main bundle (app.whenReady → NaiveWindow.loadFile → page
   // bundle) for whichever demo's bundles it is handed. No per-demo host
-  // crates — `naivi desktop` works for any demo.
+  // crates — `nv desktop` works for any demo.
   const nativeCrate = 'naivi-native';
   const guestArgs = [mainBundlePath, pageBundlePath, stylesPath, cwd];
   console.log(

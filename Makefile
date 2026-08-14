@@ -1,10 +1,10 @@
-# naivi — Vue Vapor AOT frontend on blitz. Mirrors naive/Makefile: `naivi
+# naivi — Vue Vapor AOT frontend on blitz. Mirrors naive/Makefile: `nv
 # wasm` is now ONE command (builds the demo's guest JS, then builds/serves the
 # shared Rust host `packages/naivi-wasm` via trunk). The remaining targets are
 # the lower-level building blocks it composes.
 #
 # Usage:
-#   make wasm                     # `naivi wasm` — build guest + serve host (:8090)
+#   make wasm                     # `nv wasm` — build guest + serve host (:8090)
 #   make wasm DEMO=hello          # another demo
 #   make build-host               # trunk-build the Rust wasm host
 #   make serve-host               # trunk serve on :8090 (local nginx owns :8080)
@@ -19,11 +19,11 @@ DEMO ?= todomvc
 # One command: build the demo's guest into the SHARED host's assets/guest,
 # then serve the host with trunk (blocking). Stale trunk on :8090 is replaced.
 wasm:
-	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/naivi.mjs wasm
+	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/nv.mjs wasm
 
 # Build only the demo's guest JS bundle (then run `make serve-host`).
 wasm-guest:
-	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/naivi.mjs wasm --release
+	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/nv.mjs wasm --release
 
 # Build the Rust wasm host (the shared cdylib that serves any demo's guest).
 build-host:
@@ -36,11 +36,11 @@ serve-host:
 
 # Run the demo in a native winit window (shared rquickjs host).
 desktop:
-	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/naivi.mjs desktop
+	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/nv.mjs desktop
 
 # Serve the demo in a plain browser (standard Vite, no WASM).
 web:
-	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/naivi.mjs web
+	cd examples/naivi/$(DEMO) && node ../../../js/naivi-cli/bin/nv.mjs web
 
 check:
 	pnpm -r typecheck

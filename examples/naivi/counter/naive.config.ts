@@ -11,7 +11,7 @@
 // WASM-mode note: `mount()` detects wasm mode by reading
 // `globalThis.__NAIVE_MODE` at runtime (see index-vue-vapor.ts), so a
 // compile-time `define: { __NAIVE_MODE: '"wasm"' }` is NOT the mechanism.
-// Instead the cli's `naivi wasm --release` emits a wrapper `guest.js` that
+// Instead the cli's `nv wasm --release` emits a wrapper `guest.js` that
 // sets `globalThis.__NAIVE_MODE = "wasm"` before importing the Vite-built
 // bundle (see js/naivi-cli/src/cli.ts `buildWasmSite`).
 import { defineNaiveConfig, defineViteConfig } from '@naivi/cli';

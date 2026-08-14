@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // @naivi/cli — naivi toolchain CLI.
-// Usage: npx naivi web | npx naivi wasm [--release] | npx naivi desktop [--release]
+// Usage: npx nv web | npx nv wasm [--release] | npx nv desktop [--release]
 
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
@@ -10,14 +10,14 @@ import { parseCommand, TRUNK_PORT, type ParsedCommand } from './command.ts';
 import { validateHostStyles } from './host-style.ts';
 import { createServer } from 'vite';
 
-const HELP_TEXT = `naivi — Vue Vapor CLI
+const HELP_TEXT = `nv — naivi Vue Vapor CLI
 
 Usage:
-  npx naivi web                 Start dev server with standard Vite (no WASM)
-  npx naivi wasm                Build the guest + serve the WASM host (trunk, http://localhost:8090)
-  npx naivi wasm --release      Build the guest + the production WASM host into packages/naivi-wasm/dist
-  npx naivi desktop             Start the native desktop renderer (QuickJS guest)
-  npx naivi desktop --release   Package a macOS .app bundle into release/`;
+  npx nv web                 Start dev server with standard Vite (no WASM)
+  npx nv wasm                Build the guest + serve the WASM host (trunk, http://localhost:8090)
+  npx nv wasm --release      Build the guest + the production WASM host into packages/naivi-wasm/dist
+  npx nv desktop             Start the native desktop renderer (QuickJS guest)
+  npx nv desktop --release   Package a macOS .app bundle into release/`;
 
 // ── commands ────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ function processCommand(pid: number): string {
 }
 
 /**
- * `naivi wasm` — the ONE command for the full wasm flow.
+ * `nv wasm` — the ONE command for the full wasm flow.
  *
  * 1. Build the demo's guest JS into the SHARED trunk host
  *    (`packages/naivi-wasm/assets/guest/`).
@@ -63,11 +63,11 @@ function processCommand(pid: number): string {
  *    the engine. A Vite-only dev server alone renders blank: the guest is
  *    application content, but the wasm engine + canvas come from the host.
  *
- * Dev (`naivi wasm`): `trunk serve --release` on the trunk port (8090 by
+ * Dev (`nv wasm`): `trunk serve --release` on the trunk port (8090 by
  * default — local nginx owns 8080; `--port` overrides). Any stale trunk host
  * still holding the port is restarted so the freshly built guest is served.
  *
- * Release (`naivi wasm --release`): also `trunk build --release` the host so
+ * Release (`nv wasm --release`): also `trunk build --release` the host so
  * `packages/naivi-wasm/dist` is a deployable static site.
  */
 async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
@@ -87,7 +87,7 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
     console.log(C.dim(`[naivi] Port ${port} held by a stale trunk host — restarting`));
     execSync(`kill ${stale.join(' ')}`, { stdio: 'ignore' });
   }
-  console.log(C.ok(`naivi wasm → http://localhost:${port}`));
+  console.log(C.ok(`nv wasm → http://localhost:${port}`));
   // Blocking: the trunk host owns the dev server until Ctrl+C.
   execFileSync('trunk', ['serve', '--release', '--port', String(port)], {
     cwd: trunkCrateDir,
@@ -99,7 +99,7 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
  * Build the U4 wasm guest bundle (Vite) and copy it into the SHARED trunk
  * crate's `assets/guest/`, ready for the host to serve.
  *
- * Layout (documented, reproducible): running `naivi wasm` (any demo dir) puts
+ * Layout (documented, reproducible): running `nv wasm` (any demo dir) puts
  * `<root>/packages/naivi-wasm/assets/guest/` containing
  * - `guest.js` — a thin wrapper setting `globalThis.__NAIVE_MODE = "wasm"`,
  *   inlining the U6 author CSS (`globalThis.__NAIVE_CSS`), and importing
@@ -117,7 +117,7 @@ async function buildWasmSite(root: string, cwd: string) {
   const { compileIfNeeded } = await import('./compile.ts');
   const { runCssSubsetCheck } = await import('./check.ts');
   const { resolveNaiveViteConfig, loadPageViteConfig, pageSizeOf } = await import('./vite-config.ts');
-  const page = await loadPageViteConfig(cwd, 'naivi wasm --release');
+  const page = await loadPageViteConfig(cwd, 'nv wasm --release');
   const config = await resolveNaiveViteConfig({
     cwd,
     pageViteConfig: page.vite,
@@ -145,7 +145,7 @@ async function buildWasmSite(root: string, cwd: string) {
   // The wasm host is a SINGLE shared generic trunk crate
   // (`packages/naivi-wasm`): its host page loads `./assets/guest/guest.js`
   // and serves whichever demo's guest was built last. No per-demo host crates
-  // — `naivi wasm --release` works for any demo.
+  // — `nv wasm --release` works for any demo.
   const trunkCrateDir = join(root, 'packages', 'naivi-wasm');
   const guestDir = join(trunkCrateDir, 'assets', 'guest');
   mkdirSync(guestDir, { recursive: true });
@@ -154,12 +154,12 @@ async function buildWasmSite(root: string, cwd: string) {
   console.log(C.ok(`Guest bundle → ${guestDir}`));
 }
 
-/** The `guest.js` wrapper emitted by `naivi wasm --release` (do not edit). */
+/** The `guest.js` wrapper emitted by `nv wasm --release` (do not edit). */
 function makeGuestWrapper(cssText: string): string {
   const cssLine = cssText.trim()
     ? `globalThis.__NAIVE_CSS = ${JSON.stringify(cssText)};`
     : '';
-  return `// Generated by \`naivi wasm --release\` (js/naivi-cli) — do not edit.
+  return `// Generated by \`nv wasm --release\` (js/naivi-cli) — do not edit.
 // Turns on the runtime's wasm-mode branch, inlines the U6 author CSS, then
 // loads the Vite-built guest bundle. The U4 host's wasm glue is loaded by
 // trunk itself (window.wasmBindings + TrunkApplicationStarted), so the bundle
@@ -186,32 +186,32 @@ async function main() {
     process.exit(1);
   }
 
-  // `naivi web` skips the top-level monorepo-root lookup (wasm/desktop need
+  // `nv web` skips the top-level monorepo-root lookup (wasm/desktop need
   // it to locate the shared host crates); the web config resolver resolves
   // the root itself, only to extend the fs.allow list with the js/ toolchain.
   if (parsed.command === 'web') {
     // Host-page style validation runs for every command (plan 056 R7): the
     // renderer (wasm canvas / native / web) depends on a full-viewport host
     // container, and a missing `height:100%` silently collapses the canvas.
-    validateHostStyles(cwd, 'naivi web');
+    validateHostStyles(cwd, 'nv web');
     await cmdWeb('' /* unused */, cwd, parsed.port);
     return;
   }
 
   const root = findRoot();
   if (!root) {
-    console.error('naivi: could not find the blitz monorepo root (Cargo.toml with a [workspace] containing naivi-dom).');
+    console.error('nv: could not find the blitz monorepo root (Cargo.toml with a [workspace] containing naivi-dom).');
     process.exit(1);
   }
 
-  validateHostStyles(cwd, `naivi ${parsed.command}`);
+  validateHostStyles(cwd, `nv ${parsed.command}`);
 
   if (parsed.command === 'wasm') {
     await cmdWasm(root, cwd, parsed);
   } else if (parsed.command === 'desktop') {
     await cmdDesktop(root, cwd, parsed);
   } else {
-    console.error(`naivi: unknown command \`${parsed.command}\`.`);
+    console.error(`nv: unknown command \`${parsed.command}\`.`);
     console.log(HELP_TEXT);
     process.exit(1);
   }

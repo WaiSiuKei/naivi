@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "naivi todomvc demo (Tailwind v4, synced with naive demos/todomvc) — `naivi wasm --release` + shared trunk host (packages/naivi-wasm), `naivi desktop` (shared naivi-native host), `naivi web` (pure Vite fallback).",
+  "description": "naivi todomvc demo (Tailwind v4, synced with naive demos/todomvc) — `nv wasm --release` + shared trunk host (packages/naivi-wasm), `nv desktop` (shared naivi-native host), `nv web` (pure Vite fallback).",
   "scripts": {
-    "dev": "naivi web",
-    "build:wasm": "naivi wasm --release"
+    "dev": "nv web",
+    "build:wasm": "nv wasm --release"
   },
   "engines": {
     "node": ">=24"

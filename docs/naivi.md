@@ -21,7 +21,7 @@ Rust `OpsCore` is engine-neutral; only the host adapters differ.
 |---|---|
 | `js/naivi-runtime/` | Guest runtime: mirror tree, DOM facade, style stub, dual-mode mount (`vue-vapor`) |
 | `js/naivi-compiler/` | Build-time AOT CSS producer (`compileSfcStyles` extracts SFC `<style>` → CSS text) |
-| `js/naivi-cli/` | `naivi` CLI: `web` / `wasm --release` / `desktop` (Vite bundling + host launch) |
+| `js/naivi-cli/` | `nv` CLI: `web` / `wasm --release` / `desktop` (Vite bundling + host launch) |
 | `packages/naivi-dom/` | Rust `Document` impl + engine-neutral `OpsCore` + rquickjs FFI (feature `quickjs`) |
 | `packages/naivi-guest-quickjs/` | QuickJS guest lifecycle (eval bundle, microtask pump, event drain) |
 | `packages/naivi-wasm/` | **Shared** trunk host for the wasm channel (bundles DejaVu Sans; serves any demo's guest) |
@@ -30,8 +30,8 @@ Rust `OpsCore` is engine-neutral; only the host adapters differ.
 | `examples/naivi/todomvc/` | The todomvc demo (Vue SFC, official TodoMVC structure) |
 
 Both hosts are generic — one wasm host and one native host serve **every**
-demo. There are no per-demo host crates: `naivi wasm --release` drops the
-demo's guest into `packages/naivi-wasm/assets/guest/`, and `naivi desktop`
+demo. There are no per-demo host crates: `nv wasm --release` drops the
+demo's guest into `packages/naivi-wasm/assets/guest/`, and `nv desktop`
 runs `naivi-native` with the demo's main + page bundles.
 
 The desktop `main` entry (from `naive.config.ts` `main`, e.g. `app/main.ts`)
@@ -58,20 +58,20 @@ pnpm -r test
 ### Web (plain browser, no blitz)
 ```sh
 cd examples/naivi/counter
-node ../../../js/naivi-cli/bin/naivi.mjs web
+node ../../../js/naivi-cli/bin/nv.mjs web
 ```
 
 ### Wasm (blitz in the browser via trunk)
 ```sh
 cd examples/naivi/counter
-node ../../../js/naivi-cli/bin/naivi.mjs wasm   # build guest + serve host → http://localhost:8090
+node ../../../js/naivi-cli/bin/nv.mjs wasm   # build guest + serve host → http://localhost:8090
 # `--release` instead builds the host into packages/naivi-wasm/dist (no serve)
 ```
 
 ### Native (blitz in a winit window via QuickJS)
 ```sh
 cd examples/naivi/counter
-node ../../../js/naivi-cli/bin/naivi.mjs desktop
+node ../../../js/naivi-cli/bin/nv.mjs desktop
 ```
 
 ## Protocol notes
@@ -92,7 +92,7 @@ node ../../../js/naivi-cli/bin/naivi.mjs desktop
 | Unit | Scope | Status |
 |---|---|---|
 | U1 | Fork `js/naivi-*` toolchain | ✅ |
-| U2 | `naivi web` counter demo | ✅ |
+| U2 | `nv web` counter demo | ✅ |
 | U3 | `naivi-dom` (OpsCore + NaiviDocument + events) | ✅ |
 | U4 | Wasm channel + browser counter | ✅ |
 | U5 | Native channel (rquickjs) + native counter | ✅ |
