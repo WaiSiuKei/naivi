@@ -1,0 +1,21 @@
+[package]
+name = "blitz-macos-text"
+description = "Native macOS (CoreGraphics) text rasterization for the naivi CoreText backend"
+version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Linebender dependencies
+parley = { workspace = true }
+
+# macOS FFI. These crates only build on macOS; the crate body is cfg-gated so
+# non-macOS targets compile an empty stub.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = "21"
+core-foundation = "0.10"
+core-graphics = "0.24"

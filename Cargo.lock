@@ -955,6 +955,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "blitz-macos-text"
+version = "0.3.0-beta.1"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
+ "core-text",
+ "parley",
+]
+
+[[package]]
 name = "blitz-net"
 version = "0.3.0-beta.1"
 dependencies = [
@@ -977,6 +987,7 @@ dependencies = [
  "anyrender",
  "anyrender_svg",
  "blitz-dom",
+ "blitz-macos-text",
  "blitz-traits",
  "color",
  "euclid",
