@@ -1,14 +1,16 @@
 use anyrender::PaintScene;
-use blitz_dom::{BaseDocument, NodeId, node::TextBrush, util::ToColorColor};
+use blitz_dom::{BaseDocument, NodeId, node::{RasterImageData, TextBrush}, util::ToColorColor};
 use kurbo::{Affine, Rect, Stroke, Vec2};
 use parley::{Affinity, Cursor, GlyphRun, Layout, Line, PositionedLayoutItem, Selection};
-use peniko::{
-    Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality, ImageSampler,
-};
+use peniko::{Fill, ImageQuality};
 use style::values::computed::TextDecorationLine;
 
 #[cfg(target_os = "macos")]
 use blitz_macos_text; // native CoreText glyph rasterization (naivi)
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
+#[cfg(target_os = "macos")]
+use crate::render::to_peniko_image;
 
 use crate::color::{Color, ToColorColor as _};
 use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
@@ -87,7 +89,6 @@ pub(crate) fn stroke_text<'a>(
                 let run = glyph_run.run();
                 let font = run.font();
                 let font_size = run.font_size();
-                let metrics = run.metrics();
                 let style = glyph_run.style();
                 let synthesis = run.synthesis();
                 let glyph_xform = synthesis
@@ -101,18 +102,7 @@ pub(crate) fn stroke_text<'a>(
                     .primary_styles()
                     .unwrap();
                 let itext_styles = styles.get_inherited_text();
-                let text_styles = styles.get_text();
                 let text_color = itext_styles.color.as_color_color();
-                let text_decoration_color = text_styles
-                    .text_decoration_color
-                    .as_absolute()
-                    .map(ToColorColor::as_color_color)
-                    .unwrap_or(text_color);
-                let text_decoration_brush = anyrender::Paint::from(text_decoration_color);
-                let text_decoration_line = text_styles.text_decoration_line;
-                let has_underline = text_decoration_line.contains(TextDecorationLine::UNDERLINE);
-                let has_strikethrough =
-                    text_decoration_line.contains(TextDecorationLine::LINE_THROUGH);
 
                 let embolden = if FONT_EMBOLDEN_ENABLED {
                     let fs = font_size as f64 / scale;
@@ -139,30 +129,59 @@ pub(crate) fn stroke_text<'a>(
                     }),
                 );
 
-                let mut draw_decoration_line =
-                    |offset: f32, size: f32, brush: &anyrender::Paint| {
-                        let x = glyph_run.offset() as f64;
-                        let w = glyph_run.advance() as f64;
-                        let y = (glyph_run.baseline() - offset + size / 2.0) as f64;
-                        let line = kurbo::Line::new((x, y), (x + w, y));
-                        scene.stroke(&Stroke::new(size as f64), transform, brush, None, &line)
-                    };
-
-                if has_underline {
-                    let offset = metrics.underline_offset;
-                    let size = metrics.underline_size;
-
-                    // TODO: intercept line when crossing an descending character like "gqy"
-                    draw_decoration_line(offset, size, &text_decoration_brush);
-                }
-                if has_strikethrough {
-                    let offset = metrics.strikethrough_offset;
-                    let size = metrics.strikethrough_size;
-
-                    draw_decoration_line(offset, size, &text_decoration_brush);
-                }
+                draw_text_decorations(scene, &glyph_run, doc, transform);
             }
         }
+    }
+}
+
+/// Draw the underline / strikethrough of a glyph run, using the run's font
+/// metrics for the line offsets and thicknesses.
+fn draw_text_decorations<'a>(
+    scene: &mut impl PaintScene,
+    glyph_run: &GlyphRun<'a, TextBrush>,
+    doc: &BaseDocument,
+    transform: Affine,
+) {
+    let metrics = glyph_run.run().metrics();
+    let style = glyph_run.style();
+    let styles = doc
+        .get_node(style.brush.id)
+        .unwrap()
+        .primary_styles()
+        .unwrap();
+    let itext_styles = styles.get_inherited_text();
+    let text_styles = styles.get_text();
+    let text_color = itext_styles.color.as_color_color();
+    let text_decoration_color = text_styles
+        .text_decoration_color
+        .as_absolute()
+        .map(ToColorColor::as_color_color)
+        .unwrap_or(text_color);
+    let text_decoration_brush = anyrender::Paint::from(text_decoration_color);
+    let text_decoration_line = text_styles.text_decoration_line;
+    let has_underline = text_decoration_line.contains(TextDecorationLine::UNDERLINE);
+    let has_strikethrough = text_decoration_line.contains(TextDecorationLine::LINE_THROUGH);
+
+    let mut draw_decoration_line =
+        |offset: f32, size: f32, brush: &anyrender::Paint| {
+            let x = glyph_run.offset() as f64;
+            let w = glyph_run.advance() as f64;
+            let y = (glyph_run.baseline() - offset + size / 2.0) as f64;
+            let line = kurbo::Line::new((x, y), (x + w, y));
+            scene.stroke(&Stroke::new(size as f64), transform, brush, None, &line)
+        };
+
+    if has_underline {
+        // TODO: intercept line when crossing an descending character like "gqy"
+        draw_decoration_line(metrics.underline_offset, metrics.underline_size, &text_decoration_brush);
+    }
+    if has_strikethrough {
+        draw_decoration_line(
+            metrics.strikethrough_offset,
+            metrics.strikethrough_size,
+            &text_decoration_brush,
+        );
     }
 }
 
@@ -203,76 +222,20 @@ fn draw_glyph_run_native<'a>(
     let Some(key) = run.native_font() else {
         return false;
     };
-    let Some(font) = blitz_macos_text::resolve_font(key) else {
-        return false;
-    };
-    let font_size = run.font_size();
+    let font = blitz_macos_text::resolve_font(key);
 
     for glyph in glyph_run.positioned_glyphs() {
-        let Some(bmp) = blitz_macos_text::rasterize_glyph(&font, glyph.id, font_size) else {
+        let Some(bmp) = blitz_macos_text::rasterize_glyph(&font, glyph.id) else {
             continue;
         };
-        let image = ImageData {
-            data: bmp.data.into(),
-            format: ImageFormat::Rgba8,
-            width: bmp.width,
-            height: bmp.height,
-            alpha_type: ImageAlphaType::Alpha,
-        };
-        let brush = ImageBrush {
-            image,
-            sampler: ImageSampler {
-                x_extend: Extend::Repeat,
-                y_extend: Extend::Repeat,
-                quality: ImageQuality::Medium,
-                alpha: 1.0,
-            },
-        };
+        let raster = RasterImageData::new(bmp.width, bmp.height, Arc::new(bmp.data.to_vec()));
+        let brush = to_peniko_image(&raster, ImageQuality::Medium);
         let x = (glyph.x + bmp.offset_x) as f64;
         let y = (glyph.y + bmp.offset_y) as f64;
         let t = transform.pre_translate(Vec2::new(x, y));
         scene.draw_image(brush.as_ref(), t);
     }
 
-    // Underline / strikethrough keep using the run's CoreText metrics.
-    let metrics = run.metrics();
-    let style = glyph_run.style();
-    let styles = doc
-        .get_node(style.brush.id)
-        .unwrap()
-        .primary_styles()
-        .unwrap();
-    let itext_styles = styles.get_inherited_text();
-    let text_styles = styles.get_text();
-    let text_color = itext_styles.color.as_color_color();
-    let text_decoration_color = text_styles
-        .text_decoration_color
-        .as_absolute()
-        .map(ToColorColor::as_color_color)
-        .unwrap_or(text_color);
-    let text_decoration_brush = anyrender::Paint::from(text_decoration_color);
-    let text_decoration_line = text_styles.text_decoration_line;
-    let has_underline = text_decoration_line.contains(TextDecorationLine::UNDERLINE);
-    let has_strikethrough = text_decoration_line.contains(TextDecorationLine::LINE_THROUGH);
-
-    let mut draw_decoration_line =
-        |offset: f32, size: f32, brush: &anyrender::Paint| {
-            let x = glyph_run.offset() as f64;
-            let w = glyph_run.advance() as f64;
-            let y = (glyph_run.baseline() - offset + size / 2.0) as f64;
-            let line = kurbo::Line::new((x, y), (x + w, y));
-            scene.stroke(&Stroke::new(size as f64), transform, brush, None, &line)
-        };
-
-    if has_underline {
-        draw_decoration_line(metrics.underline_offset, metrics.underline_size, &text_decoration_brush);
-    }
-    if has_strikethrough {
-        draw_decoration_line(
-            metrics.strikethrough_offset,
-            metrics.strikethrough_size,
-            &text_decoration_brush,
-        );
-    }
+    draw_text_decorations(scene, glyph_run, doc, transform);
     true
 }

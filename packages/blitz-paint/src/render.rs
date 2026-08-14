@@ -561,7 +561,10 @@ fn to_image_quality(image_rendering: ImageRendering) -> peniko::ImageQuality {
 }
 
 /// Ensure that the `resized_image` field has a correctly sized image
-fn to_peniko_image(image: &RasterImageData, quality: peniko::ImageQuality) -> peniko::ImageBrush {
+pub(crate) fn to_peniko_image(
+    image: &RasterImageData,
+    quality: peniko::ImageQuality,
+) -> peniko::ImageBrush {
     peniko::ImageBrush {
         image: ImageData {
             data: image.data.clone(),
