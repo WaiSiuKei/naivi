@@ -1,9 +1,14 @@
 use anyrender::PaintScene;
 use blitz_dom::{BaseDocument, NodeId, node::TextBrush, util::ToColorColor};
-use kurbo::{Affine, Rect, Stroke};
-use parley::{Affinity, Cursor, Layout, Line, PositionedLayoutItem, Selection};
-use peniko::Fill;
+use kurbo::{Affine, Rect, Stroke, Vec2};
+use parley::{Affinity, Cursor, GlyphRun, Layout, Line, PositionedLayoutItem, Selection};
+use peniko::{
+    Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality, ImageSampler,
+};
 use style::values::computed::TextDecorationLine;
+
+#[cfg(target_os = "macos")]
+use blitz_macos_text; // native CoreText glyph rasterization (naivi)
 
 use crate::color::{Color, ToColorColor as _};
 use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
@@ -72,6 +77,13 @@ pub(crate) fn stroke_text<'a>(
     for line in lines {
         for item in line.items() {
             if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
+                // macOS CoreText backend: runs carry a self-describing native
+                // font key. Draw them with native (color-aware) rasterization;
+                // the anyrender monochrome path below handles everything else.
+                #[cfg(target_os = "macos")]
+                if draw_glyph_run_native(scene, &glyph_run, doc, transform) {
+                    continue;
+                }
                 let run = glyph_run.run();
                 let font = run.font();
                 let font_size = run.font_size();
@@ -171,4 +183,96 @@ pub(crate) fn draw_text_selection(
         let rect = kurbo::Rect::new(rect.x0, rect.y0, rect.x1, rect.y1);
         scene.fill(Fill::NonZero, transform, SELECTION_COLOR, None, &rect);
     });
+}
+
+/// macOS CoreText backend: draw one glyph run with native rasterization.
+///
+/// Runs carrying a self-describing native font key are rasterized to RGBA
+/// bitmaps (color-aware, e.g. Apple Color Emoji) via CoreGraphics and drawn
+/// into the scene as images. Returns `true` when it handled the run, so the
+/// caller skips the anyrender monochrome path. All CoreText/CoreGraphics logic
+/// lives in `blitz-macos-text` (R7); this is the only seam in this file.
+#[cfg(target_os = "macos")]
+fn draw_glyph_run_native<'a>(
+    scene: &mut impl PaintScene,
+    glyph_run: &GlyphRun<'a, TextBrush>,
+    doc: &BaseDocument,
+    transform: Affine,
+) -> bool {
+    let run = glyph_run.run();
+    let Some(key) = run.native_font() else {
+        return false;
+    };
+    let Some(font) = blitz_macos_text::resolve_font(key) else {
+        return false;
+    };
+    let font_size = run.font_size();
+
+    for glyph in glyph_run.positioned_glyphs() {
+        let Some(bmp) = blitz_macos_text::rasterize_glyph(&font, glyph.id, font_size) else {
+            continue;
+        };
+        let image = ImageData {
+            data: bmp.data.into(),
+            format: ImageFormat::Rgba8,
+            width: bmp.width,
+            height: bmp.height,
+            alpha_type: ImageAlphaType::Alpha,
+        };
+        let brush = ImageBrush {
+            image,
+            sampler: ImageSampler {
+                x_extend: Extend::Repeat,
+                y_extend: Extend::Repeat,
+                quality: ImageQuality::Medium,
+                alpha: 1.0,
+            },
+        };
+        let x = (glyph.x + bmp.offset_x) as f64;
+        let y = (glyph.y + bmp.offset_y) as f64;
+        let t = transform.pre_translate(Vec2::new(x, y));
+        scene.draw_image(brush.as_ref(), t);
+    }
+
+    // Underline / strikethrough keep using the run's CoreText metrics.
+    let metrics = run.metrics();
+    let style = glyph_run.style();
+    let styles = doc
+        .get_node(style.brush.id)
+        .unwrap()
+        .primary_styles()
+        .unwrap();
+    let itext_styles = styles.get_inherited_text();
+    let text_styles = styles.get_text();
+    let text_color = itext_styles.color.as_color_color();
+    let text_decoration_color = text_styles
+        .text_decoration_color
+        .as_absolute()
+        .map(ToColorColor::as_color_color)
+        .unwrap_or(text_color);
+    let text_decoration_brush = anyrender::Paint::from(text_decoration_color);
+    let text_decoration_line = text_styles.text_decoration_line;
+    let has_underline = text_decoration_line.contains(TextDecorationLine::UNDERLINE);
+    let has_strikethrough = text_decoration_line.contains(TextDecorationLine::LINE_THROUGH);
+
+    let mut draw_decoration_line =
+        |offset: f32, size: f32, brush: &anyrender::Paint| {
+            let x = glyph_run.offset() as f64;
+            let w = glyph_run.advance() as f64;
+            let y = (glyph_run.baseline() - offset + size / 2.0) as f64;
+            let line = kurbo::Line::new((x, y), (x + w, y));
+            scene.stroke(&Stroke::new(size as f64), transform, brush, None, &line)
+        };
+
+    if has_underline {
+        draw_decoration_line(metrics.underline_offset, metrics.underline_size, &text_decoration_brush);
+    }
+    if has_strikethrough {
+        draw_decoration_line(
+            metrics.strikethrough_offset,
+            metrics.strikethrough_size,
+            &text_decoration_brush,
+        );
+    }
+    true
 }
