@@ -78,12 +78,21 @@ struct DocHandle {
     inner: Rc<RefCell<BaseDocument>>,
     /// The QuickJS guest (bundle eval + microtask pump + event drain).
     guest: Rc<RefCell<QuickJsGuest>>,
+    /// Whether a guest mount error has already been surfaced (mount failures
+    /// are async and land in `__naiveMountError`, otherwise silent → blank
+    /// window with no explanation).
+    mount_error_surfaced: bool,
 }
 
 impl DocHandle {
     fn new(doc: Rc<RefCell<NaiviDocument>>, guest: Rc<RefCell<QuickJsGuest>>) -> Self {
         let inner = Rc::clone(&doc.borrow().inner);
-        Self { doc, inner, guest }
+        Self {
+            doc,
+            inner,
+            guest,
+            mount_error_surfaced: false,
+        }
     }
 }
 
@@ -112,6 +121,19 @@ impl Document for DocHandle {
         if let Ok(guest) = self.guest.try_borrow_mut() {
             if let Err(error) = guest.tick() {
                 tracing::error!("DocHandle.poll: guest tick failed: {error:?}");
+            }
+        }
+        // Surface a silent guest mount failure once (the desktop entry's async
+        // `mount` catches and stores the error in `__naiveMountError`).
+        if !self.mount_error_surfaced {
+            if let Ok(guest) = self.guest.try_borrow_mut() {
+                let err = guest
+                    .eval_string("String(globalThis.__naiveMountError ?? '')")
+                    .unwrap_or_default();
+                if !err.is_empty() {
+                    self.mount_error_surfaced = true;
+                    tracing::error!("naive desktop: page mount failed: {err}");
+                }
             }
         }
         // Drain blitz-side events into the FFI queue.

@@ -8,7 +8,7 @@
 
 use crate::main_ffi;
 use naivi_dom::ffi;
-use rquickjs::{Context, Runtime, Value};
+use rquickjs::{Context, Ctx, Runtime, Value};
 
 /// Minimal console polyfill routed to Rust logs (QuickJS-NG ships no console).
 const CONSOLE_SHIM: &str = r#"
@@ -25,6 +25,84 @@ globalThis.console = {
   count: () => {},
   group: () => {},
   groupEnd: () => {},
+};
+"#;
+
+/// Web `TextEncoder`/`TextDecoder` polyfills (QuickJS-NG ships neither, and the
+/// naivi binary-frame writer encodes every DOM string with `TextEncoder`).
+/// Pure JS, spec-conformant: astral pairs as 4-byte sequences, lone surrogates
+/// as U+FFFD.
+const TEXT_CODEC_SHIM: &str = r#"
+globalThis.TextEncoder = globalThis.TextEncoder || class {
+  constructor() { this.encoding = 'utf-8'; }
+  encode(input = '') {
+    const s = String(input);
+    const n = s.length;
+    const out = new Uint8Array(n * 4);
+    let o = 0;
+    for (let i = 0; i < n; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 0x80) {
+        out[o++] = c;
+      } else if (c < 0x800) {
+        out[o++] = 0xc0 | (c >> 6);
+        out[o++] = 0x80 | (c & 0x3f);
+      } else if (c >= 0xd800 && c <= 0xdbff) {
+        const lo = i + 1 < n ? s.charCodeAt(i + 1) : -1;
+        if (lo >= 0xdc00 && lo <= 0xdfff) {
+          const cp = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+          out[o++] = 0xf0 | (cp >> 18);
+          out[o++] = 0x80 | ((cp >> 12) & 0x3f);
+          out[o++] = 0x80 | ((cp >> 6) & 0x3f);
+          out[o++] = 0x80 | (cp & 0x3f);
+          i++;
+          continue;
+        }
+        // High surrogate not followed by a low one: lone surrogate → U+FFFD.
+        out[o++] = 0xef; out[o++] = 0xbf; out[o++] = 0xbd;
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        // Lone low surrogate → U+FFFD.
+        out[o++] = 0xef; out[o++] = 0xbf; out[o++] = 0xbd;
+      } else {
+        out[o++] = 0xe0 | (c >> 12);
+        out[o++] = 0x80 | ((c >> 6) & 0x3f);
+        out[o++] = 0x80 | (c & 0x3f);
+      }
+    }
+    return out.subarray(0, o);
+  }
+};
+globalThis.TextDecoder = globalThis.TextDecoder || class {
+  constructor(label = 'utf-8', options) { this.encoding = 'utf-8'; }
+  decode(input) {
+    const b = input instanceof Uint8Array ? input
+      : input instanceof ArrayBuffer ? new Uint8Array(input)
+      : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+      : new Uint8Array(0);
+    let out = '';
+    let i = 0;
+    while (i < b.length) {
+      const c0 = b[i];
+      if (c0 < 0x80) { out += String.fromCharCode(c0); i += 1; }
+      else if (c0 < 0xc2) { out += '\ufffd'; i += 1; }
+      else if (c0 < 0xe0) {
+        if (i + 1 >= b.length) { out += '\ufffd'; break; }
+        out += String.fromCharCode(((c0 & 0x1f) << 6) | (b[i + 1] & 0x3f));
+        i += 2;
+      } else if (c0 < 0xf0) {
+        if (i + 2 >= b.length) { out += '\ufffd'; break; }
+        const cp = ((c0 & 0x0f) << 12) | ((b[i + 1] & 0x3f) << 6) | (b[i + 2] & 0x3f);
+        out += (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff)) ? '\ufffd' : String.fromCharCode(cp);
+        i += 3;
+      } else if (c0 < 0xf5) {
+        if (i + 3 >= b.length) { out += '\ufffd'; break; }
+        const cp = ((c0 & 0x07) << 18) | ((b[i + 1] & 0x3f) << 12) | ((b[i + 2] & 0x3f) << 6) | (b[i + 3] & 0x3f);
+        out += (cp < 0x10000 || cp > 0x10ffff) ? '\ufffd' : String.fromCodePoint(cp);
+        i += 4;
+      } else { out += '\ufffd'; i += 1; }
+    }
+    return out;
+  }
 };
 "#;
 
@@ -88,6 +166,7 @@ impl QuickJsGuest {
         ctx.globals().set("naive", naive)?;
         ffi::register_logging(ctx.clone())?;
         let _: Value = ctx.eval(CONSOLE_SHIM)?;
+        install_text_codecs(ctx)?;
         if with_main_namespace {
             main_ffi::build_main_namespace(ctx.clone())?;
         }
@@ -126,6 +205,18 @@ impl QuickJsGuest {
         self.context.with(|ctx| {
             let _: Value = ctx.eval(source)?;
             Ok(())
+        })
+    }
+
+    /// Eval a snippet and return its value as a string (diagnostics).
+    pub fn eval_string(&self, source: &str) -> rquickjs::Result<String> {
+        self.context.with(|ctx| {
+            let value: Value = ctx.eval(source)?;
+            let out = match value.into_string() {
+                Some(s) => s.to_string().unwrap_or_default(),
+                None => String::new(),
+            };
+            Ok(out)
         })
     }
 
@@ -185,5 +276,43 @@ impl Drop for QuickJsGuest {
         if self.initialized {
             self.shutdown();
         }
+    }
+}
+
+/// Register `globalThis.TextEncoder`/`TextDecoder` (see [`TEXT_CODEC_SHIM`]).
+/// QuickJS-NG ships neither; without this the guest's mount fails with
+/// "TextEncoder is not defined" and the window stays blank.
+fn install_text_codecs(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+    let _: Value = ctx.eval(TEXT_CODEC_SHIM)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The binary-frame writer encodes every DOM string with `TextEncoder`;
+    /// QuickJS ships none, so the shim must be a correct UTF-8 encoder.
+    #[test]
+    fn text_codec_shim_matches_utf8() {
+        let guest = QuickJsGuest::new().unwrap();
+        guest.eval_script(TEXT_CODEC_SHIM).unwrap();
+        // ASCII stays single-byte (a broken encoder emits UTF-16 null pairs).
+        let width = guest
+            .eval_string("Array.from(new TextEncoder().encode('width')).join(',')")
+            .unwrap();
+        assert_eq!(width, "119,105,100,116,104");
+        // Astral pair (😀 = U+1F600) round-trips through decode.
+        let rt = guest
+            .eval_string(
+                "new TextDecoder().decode(new TextEncoder().encode('Hello 世界 😀'))",
+            )
+            .unwrap();
+        assert_eq!(rt, "Hello 世界 😀");
+        // Lone surrogate becomes U+FFFD (EF BF BD), not a dropped character.
+        let lone = guest
+            .eval_string("Array.from(new TextEncoder().encode('a\\uD800b')).join(',')")
+            .unwrap();
+        assert_eq!(lone, "97,239,191,189,98");
     }
 }
