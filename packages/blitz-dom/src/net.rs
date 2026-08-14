@@ -294,15 +294,17 @@ struct FontFaceHandler {
 /// loader; the `@font-face` path keeps its own handling in
 /// `FontFaceHandler::parse`.
 pub(crate) fn decompress_font_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
-    let compressed = bytes.len() >= 4 && matches!(&bytes[0..4], b"wOFF" | b"wOF2");
     let decoded = crate::util::decode_font_bytes(bytes);
-    let is_borrowed = matches!(&decoded, std::borrow::Cow::Borrowed(_));
     // Without the `woff` feature, known-compressed bytes pass through raw
     // (registration then fails to parse them, matching the previous behavior).
     // With it, a borrowed result means decompression failed.
     #[cfg(feature = "woff")]
-    if compressed && is_borrowed {
-        return None;
+    {
+        let compressed = bytes.len() >= 4 && matches!(&bytes[0..4], b"wOFF" | b"wOF2");
+        let is_borrowed = matches!(&decoded, std::borrow::Cow::Borrowed(_));
+        if compressed && is_borrowed {
+            return None;
+        }
     }
     Some(decoded.into_owned())
 }
@@ -313,7 +315,8 @@ impl NetHandler for ResourceHandler<FontFaceHandler> {
     }
 }
 impl FontFaceHandler {
-    fn parse(&mut self, bytes: Bytes) -> Result<Resource, String> {        if self.format == FontFaceSourceFormatKeyword::None && bytes.len() >= 4 {
+    fn parse(&mut self, bytes: Bytes) -> Result<Resource, String> {
+        if self.format == FontFaceSourceFormatKeyword::None && bytes.len() >= 4 {
             self.format = match &bytes.as_ref()[0..4] {
                 // WOFF (v1) files begin with 0x774F4646 ('wOFF' in ascii)
                 // See: <https://w3c.github.io/woff/woff1/spec/Overview.html#WOFFHeader>

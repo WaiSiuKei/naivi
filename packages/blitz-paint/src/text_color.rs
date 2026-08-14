@@ -32,6 +32,9 @@ use skrifa::color::{
 use skrifa::instance::{LocationRef, NormalizedCoord, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
+// `colr()` is a `read_fonts::TableProvider` trait method (re-exported as
+// `skrifa::raw`); bring the trait into scope for the COLR-presence check.
+use skrifa::raw::TableProvider as _;
 use tiny_skia::{
     BlendMode, Color, FillRule, FilterQuality, GradientStop, LinearGradient, Mask, Paint, Path,
     PathBuilder, Pixmap, PixmapPaint, Point, RadialGradient, Rect, Shader, SpreadMode,
@@ -217,6 +220,13 @@ pub(crate) fn draw_glyph_run_color<'a>(
     let coords = run.normalized_coords().to_vec();
     let blob_id = font.data.id();
 
+    // Fast path: fonts without a COLR table have no color glyphs. Skip the
+    // per-glyph cache-key / lookup / rasterize attempt and let the caller's
+    // monochrome path handle the run (common case for Latin-only text).
+    if font_ref.colr().is_err() {
+        return false;
+    }
+
     let mut color_draws: Vec<(f32, f32, Arc<RasterImageData>, i32, i32)> = Vec::new();
     let mut mono_glyphs: Vec<Glyph> = Vec::new();
 
@@ -295,7 +305,11 @@ fn rasterize_color(
     let width = width as u32;
     let height = height as u32;
 
-    let mut painter = TinySkiaColorPainter::new(font.clone(), width, height);
+    let mut painter = match TinySkiaColorPainter::new(font.clone(), width, height) {
+        Some(painter) => painter,
+        // Allocation failure: fall back to the monochrome path (U7 contract).
+        None => return None,
+    };
     // Font units (y-up) → canvas (y-down), scaled to font_size and translated
     // so the clip box top-left lands at the canvas origin.
     painter.transform = Transform::from_row(scale, 0.0, 0.0, -scale, -x_min, y_max);
@@ -331,11 +345,11 @@ struct TinySkiaColorPainter<'a> {
 }
 
 impl<'a> TinySkiaColorPainter<'a> {
-    fn new(font: FontRef<'a>, width: u32, height: u32) -> Self {
-        let mut pixmap = Pixmap::new(width, height).expect("color glyph pixmap allocation");
+    fn new(font: FontRef<'a>, width: u32, height: u32) -> Option<Self> {
+        let mut pixmap = Pixmap::new(width, height)?;
         pixmap.fill(Color::TRANSPARENT);
         let palettes = ColorPalettes::new(&font);
-        Self {
+        Some(Self {
             targets: vec![pixmap],
             layer_modes: Vec::new(),
             palettes,
@@ -345,7 +359,7 @@ impl<'a> TinySkiaColorPainter<'a> {
             transform_stack: Vec::new(),
             clip: None,
             clip_stack: Vec::new(),
-        }
+        })
     }
 
     /// Consume the top (base) target's raw premultiplied RGBA bytes.
@@ -478,11 +492,16 @@ impl<'a> TinySkiaColorPainter<'a> {
     }
 
     /// Push a clip path (font units) rasterized into a device-space mask and
-    /// intersected with the current accumulated clip.
+    /// intersected with the current accumulated clip. On mask allocation
+    /// failure the clip is skipped (defensive; the pixmap at the same size
+    /// already allocated).
     fn push_clip_path(&mut self, path: &Path) {
         let (w, h) = self.size;
         let prev = self.clip.take();
-        let mut mask = Mask::new(w, h).unwrap();
+        let Some(mut mask) = Mask::new(w, h) else {
+            self.clip = prev;
+            return;
+        };
         mask.fill_path(path, FillRule::Winding, true, self.transform);
         if let Some(prev) = prev.as_ref() {
             for (d, s) in mask.data_mut().iter_mut().zip(prev.data()) {
@@ -546,7 +565,12 @@ impl ColorPainter for TinySkiaColorPainter<'_> {
 
     fn push_layer(&mut self, composite_mode: CompositeMode) {
         let (w, h) = self.size;
-        let mut child = Pixmap::new(w, h).expect("color glyph layer allocation");
+        // On allocation failure the layer is skipped (draws into the parent
+        // directly) rather than panicking - degrades only under memory
+        // pressure, keeping the wasm tab alive (U7 fallback contract).
+        let Some(mut child) = Pixmap::new(w, h) else {
+            return;
+        };
         child.fill(Color::TRANSPARENT);
         self.targets.push(child);
         self.layer_modes.push(map_composite_mode(composite_mode));

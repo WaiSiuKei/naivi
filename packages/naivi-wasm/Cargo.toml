@@ -40,4 +40,6 @@ web-sys = { workspace = true, features = [
     "RequestInit",
     "RequestMode",
     "Response",
+    "AbortController",
+    "AbortSignal",
 ] }

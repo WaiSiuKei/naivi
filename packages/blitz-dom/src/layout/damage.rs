@@ -395,15 +395,14 @@ impl HoistedPaintChildren {
 
 impl BaseDocument {
     pub(crate) fn invalidate_inline_contexts(&mut self) {
+        let scale = self.viewport.scale();
+        let font_ctx = &self.font_ctx;
+        let layout_ctx = &mut self.layout_ctx;
         let mut anon_nodes = Vec::new();
-        let ids: Vec<NodeId> = self
-            .nodes
-            .iter()
-            .filter(|(_, n)| n.flags.contains(NodeFlags::IS_IN_DOCUMENT))
-            .map(|(id, _)| id)
-            .collect();
-        for id in ids {
-            self.damage_inline_node(id, &mut anon_nodes);
+        // Direct pass over the node slab (no intermediate id Vec / hash
+        // lookup per node).
+        for (_, node) in self.nodes.iter_mut() {
+            damage_inline_node(node, scale, font_ctx, layout_ctx, &mut anon_nodes);
         }
         self.damage_anonymous_parents(anon_nodes);
     }
@@ -412,46 +411,25 @@ impl BaseDocument {
     /// given nodes' inline contexts are re-damaged, so a newly registered font
     /// slice re-lays-out just the text that was waiting on it (R8 / AE6).
     pub(crate) fn invalidate_text_nodes(&mut self, node_ids: Vec<NodeId>) {
+        let scale = self.viewport.scale();
         let mut anon_nodes = Vec::new();
         for node_id in node_ids {
-            self.damage_inline_node(node_id, &mut anon_nodes);
+            // Damage the node's inline root (the unit that re-shapes) rather
+            // than a plain inline element, which carries no inline layout
+            // data - otherwise nested inline text is never re-laid-out with
+            // the newly registered font (R8/AE6).
+            let target = self
+                .get_node(node_id)
+                .and_then(|n| n.inline_root_ancestor().map(|root| root.id))
+                .unwrap_or(node_id);
+            let font_ctx = &self.font_ctx;
+            let layout_ctx = &mut self.layout_ctx;
+            let Some(node) = self.nodes.get_mut(target) else {
+                continue;
+            };
+            damage_inline_node(node, scale, font_ctx, layout_ctx, &mut anon_nodes);
         }
         self.damage_anonymous_parents(anon_nodes);
-    }
-
-    /// Damage one inline-context node: an element with inline layout data (or
-    /// an anonymous block) gets full damage, an input refreshes its editor
-    /// layout. Anonymous nodes are collected so their parent can be damaged
-    /// after the walk. Shared by [`Self::invalidate_inline_contexts`] and
-    /// [`Self::invalidate_text_nodes`].
-    fn damage_inline_node(&mut self, node_id: NodeId, anon_nodes: &mut Vec<NodeId>) {
-        let scale = self.viewport.scale();
-        let font_ctx = &self.font_ctx;
-        let layout_ctx = &mut self.layout_ctx;
-
-        let Some(node) = self.nodes.get_mut(node_id) else {
-            return;
-        };
-        if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
-            return;
-        }
-
-        let Some(element) = node.data.downcast_element_mut() else {
-            return;
-        };
-
-        if element.inline_layout_data.is_some() {
-            if node.is_anonymous() {
-                anon_nodes.push(node.id);
-            } else {
-                node.insert_damage(ALL_DAMAGE);
-            }
-        } else if let Some(input) = element.text_input_data_mut() {
-            input.editor.set_scale(scale);
-            let mut font_ctx = font_ctx.lock().unwrap();
-            input.editor.refresh_layout(&mut font_ctx, layout_ctx);
-            node.insert_damage(ONLY_RELAYOUT);
-        }
     }
 
     /// Re-damage the parents of anonymous blocks collected during a damage
@@ -750,5 +728,39 @@ fn node_to_paint_order(node: &Node, is_flex_or_grid: bool) -> (i32, i32) {
             position_to_order(position) + float_to_order(style.clone_float()),
             0,
         )
+    }
+}
+
+/// Damage one inline-context node: an element with inline layout data (or an
+/// anonymous block) gets full damage, an input refreshes its editor layout.
+/// Anonymous nodes are collected so their parent can be damaged after the
+/// walk. Shared by [`BaseDocument::invalidate_inline_contexts`] and
+/// [`BaseDocument::invalidate_text_nodes`].
+fn damage_inline_node(
+    node: &mut Node,
+    scale: f32,
+    font_ctx: &std::sync::Mutex<parley::FontContext>,
+    layout_ctx: &mut parley::LayoutContext<crate::node::TextBrush>,
+    anon_nodes: &mut Vec<NodeId>,
+) {
+    if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
+        return;
+    }
+
+    let Some(element) = node.data.downcast_element_mut() else {
+        return;
+    };
+
+    if element.inline_layout_data.is_some() {
+        if node.is_anonymous() {
+            anon_nodes.push(node.id);
+        } else {
+            node.insert_damage(ALL_DAMAGE);
+        }
+    } else if let Some(input) = element.text_input_data_mut() {
+        input.editor.set_scale(scale);
+        let mut font_ctx = font_ctx.lock().unwrap();
+        input.editor.refresh_layout(&mut font_ctx, layout_ctx);
+        node.insert_damage(ONLY_RELAYOUT);
     }
 }

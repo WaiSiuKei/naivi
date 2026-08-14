@@ -179,6 +179,9 @@ impl DocumentMutator<'_> {
             text.content.clear();
             text.content.push_str(value);
             node.insert_damage(ALL_DAMAGE);
+            // New text may need a font slice the settle gate stopped scanning
+            // for; re-open it (R8).
+            self.doc.font_scan_needed = true;
             // Mark ancestors dirty so the style traversal visits this subtree.
             // Without this, the traversal may skip nodes with pending damage.
             node.mark_ancestors_dirty();

@@ -265,6 +265,11 @@ pub struct BaseDocument {
     /// Bumped on every successful Google Fonts slice registration; drives
     /// FontVersion-gated targeted invalidation.
     pub(crate) font_version: u64,
+    /// Set when a re-scan could newly schedule a slice fetch (slice set
+    /// replaced, text mutated, or a node added). Cleared by the next scan;
+    /// the pre-scan gate skips the per-frame walk once nothing is Loading and
+    /// no node is waiting (settle gate, R8).
+    pub(crate) font_scan_needed: bool,
     /// Slice URLs waiting to be fetched, mapped to the element nodes that
     /// need them (for targeted invalidation on arrival).
     pub(crate) missing_font_coverage: HashMap<String, Vec<NodeId>>,
@@ -502,6 +507,7 @@ impl BaseDocument {
             font_loader: crate::fonts::FontLoader::new(),
             font_resolution_policy: crate::fonts::FontResolutionPolicy::noto_default(),
             font_version: 0,
+            font_scan_needed: false,
             missing_font_coverage: HashMap::new(),
             pending_font_arrivals: Vec::new(),
 
@@ -859,6 +865,9 @@ impl BaseDocument {
 
         // Mark the new node as changed.
         self.changed_nodes.insert(id);
+        // A new node may bring text that needs a font slice; the pre-scan
+        // settle gate must re-open for it (R8).
+        self.font_scan_needed = true;
         id
     }
 
@@ -1268,6 +1277,9 @@ impl BaseDocument {
     /// fetch paths are inert, so native documents are unaffected.
     pub fn set_google_font_slices(&mut self, slices: Vec<crate::fonts::FontSlice>) {
         self.font_loader.set_slices(slices);
+        // New slices may newly cover text the last scan could not schedule;
+        // force one more pre-scan pass.
+        self.font_scan_needed = true;
     }
 
     /// Pre-scan text nodes for missing Google Fonts coverage and schedule
@@ -1281,19 +1293,20 @@ impl BaseDocument {
         if self.font_loader.slices().is_empty() {
             return;
         }
-        // Settle gate: once every slice is loaded or failed, no scan can
-        // schedule anything (`scan_text` only returns URLs in Loading /
-        // NotStarted), so skip the per-node walk entirely in steady state.
-        let has_pending = self.font_loader.slices().iter().any(|slice| {
+        // Settle gate: once no slice is Loading and no node is waiting, the
+        // scan can only newly schedule something when the slice set changes
+        // or text mutates (both set `font_scan_needed`), so skip the walk in
+        // steady state instead of re-scanning every text node every frame.
+        let any_loading = self.font_loader.slices().iter().any(|slice| {
             matches!(
                 self.font_loader.status(&slice.url),
                 crate::fonts::slice::FontSliceStatus::Loading
-                    | crate::fonts::slice::FontSliceStatus::NotStarted
             )
         });
-        if !has_pending {
+        if !self.font_scan_needed && !any_loading && self.missing_font_coverage.is_empty() {
             return;
         }
+        self.font_scan_needed = false;
 
         // Collect (text, inline-context element) pairs first so the node-tree
         // borrow ends before we mutate loader / coverage state.
@@ -1420,12 +1433,13 @@ impl BaseDocument {
         &mut self,
         font: Blob<u8>,
         info_override: parley::fontique::FontInfoOverride<'_>,
-    ) {
+    ) -> usize {
         // TODO: Investigate eliminating double-box
         let mut global_font_ctx = self.font_ctx.lock().unwrap();
-        global_font_ctx
+        let added = global_font_ctx
             .collection
-            .register_fonts(font.clone(), Some(info_override));
+            .register_fonts(font.clone(), Some(info_override))
+            .len();
 
         #[cfg(feature = "parallel-construct")]
         {
@@ -1439,6 +1453,8 @@ impl BaseDocument {
                     .register_fonts(font.clone(), Some(info_override));
             });
         }
+
+        added
     }
 
     /// Register all font slices that arrived this frame: decompress, install
@@ -1468,7 +1484,18 @@ impl BaseDocument {
                 style: Some(pending.style.to_fontique()),
                 ..Default::default()
             };
-            self.register_font_with_override(Blob::new(Arc::new(pending.bytes)), info_override);
+            let added = self.register_font_with_override(
+                Blob::new(Arc::new(pending.bytes)),
+                info_override,
+            );
+            if added == 0 {
+                // Bytes decompressed but did not parse as a font: treat like
+                // a failed slice (R4 / AE5) instead of leaving it permanently
+                // Loaded with no font registered.
+                self.font_loader.fail(&url);
+                self.missing_font_coverage.remove(&url);
+                continue;
+            }
             self.font_version += 1;
 
             if let Some(nodes) = self.missing_font_coverage.remove(&url) {
@@ -1494,6 +1521,9 @@ impl BaseDocument {
     fn fetch_font_slice(&mut self, url: &str) {
         let Ok(parsed) = url::Url::parse(url) else {
             self.font_loader.fail(url);
+            // Mirror the FontSliceFailed handler: a slice that can never be
+            // fetched must not pin its waiting-node map entry.
+            self.missing_font_coverage.remove(url);
             return;
         };
         let doc_id = self.id;
@@ -3399,5 +3429,216 @@ mod font_slice_tests {
         // A further resolve no longer schedules anything (slice loaded).
         doc.resolve(0.0);
         assert_eq!(provider.fetched.lock().unwrap().len(), 1);
+    }
+
+    /// A document with DejaVu registered under the generic-mapped "Noto Sans"
+    /// family (so Latin text is covered by an installed font) and two sibling
+    /// divs, both with explicit `font-family: 'Noto Sans'`: one with uncovered
+    /// CJK text (schedules the CJK slice), one with covered Latin text.
+    fn make_r7_doc(provider: Arc<MockFontProvider>) -> (BaseDocument, NodeId, NodeId) {
+        let font_ctx = {
+            use parley::fontique::{Collection, CollectionOptions, FontInfoOverride, SourceCache};
+            let mut ctx = FontContext {
+                source_cache: SourceCache::new_shared(),
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+            };
+            // DejaVu covers basic Latin (the bundled bullet font does not).
+            let dejavu = wuff::decompress_woff2(include_bytes!(
+                "../../blitz-paint/assets/DejaVuSans.woff2"
+            ))
+            .expect("DejaVu woff2 decompress");
+            ctx.collection.register_fonts(
+                Blob::new(Arc::new(dejavu)),
+                Some(FontInfoOverride {
+                    family_name: Some("Noto Sans"),
+                    ..Default::default()
+                }),
+            );
+            ctx
+        };
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            net_provider: Some(provider),
+            font_ctx: Some(font_ctx),
+            ..Default::default()
+        });
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+
+        let root_id = doc.root_node().id;
+        let noto = Attribute {
+            name: qual_name!("style"),
+            value: "font-family: 'Noto Sans'".to_string(),
+        };
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let waiting = mutator.create_element(qual_name!("div"), vec![noto.clone()]);
+        let covered = mutator.create_element(qual_name!("div"), vec![noto]);
+        let text_cjk = mutator.create_text_node("中");
+        let text_latin = mutator.create_text_node("ab");
+        mutator.append_children(waiting, &[text_cjk]);
+        mutator.append_children(covered, &[text_latin]);
+        mutator.append_children(body, &[waiting, covered]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+        (doc, waiting, covered)
+    }
+
+    /// R7, isolated: a document whose only text is covered by an installed
+    /// font schedules nothing.
+    #[test]
+    fn installed_font_coverage_only_suppresses_when_text_is_covered() {
+        let provider = Arc::new(MockFontProvider::new(false));
+        let font_ctx = {
+            use parley::fontique::{Collection, CollectionOptions, FontInfoOverride, SourceCache};
+            let mut ctx = FontContext {
+                source_cache: SourceCache::new_shared(),
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+            };
+            let dejavu = wuff::decompress_woff2(include_bytes!(
+                "../../blitz-paint/assets/DejaVuSans.woff2"
+            ))
+            .expect("DejaVu woff2 decompress");
+            ctx.collection.register_fonts(
+                Blob::new(Arc::new(dejavu)),
+                Some(FontInfoOverride {
+                    family_name: Some("Noto Sans"),
+                    ..Default::default()
+                }),
+            );
+            ctx
+        };
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            net_provider: Some(provider.clone()),
+            font_ctx: Some(font_ctx),
+            ..Default::default()
+        });
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        // Explicit `font-family: 'Noto Sans'` so the installed-fonts gate
+        // (R7) resolves against the bullet font registered under that name.
+        let style = Attribute {
+            name: qual_name!("style"),
+            value: "font-family: 'Noto Sans'".to_string(),
+        };
+        let div = mutator.create_element(qual_name!("div"), vec![style]);
+        let text = mutator.create_text_node("ab");
+        mutator.append_children(div, &[text]);
+        mutator.append_children(body, &[div]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+
+        doc.resolve(0.0);
+        assert!(
+            provider.fetched.lock().unwrap().is_empty(),
+            "R7: no slice scheduled when an installed font covers the text"
+        );
+        assert_eq!(doc.font_version, 0);
+    }
+
+    /// AE6 / R8: on slice arrival, only the waiting inline root is re-damaged;
+    /// a covered sibling stays untouched. Also pins the installed-fonts gate
+    /// scheduling only the CJK slice (R7 in the same doc).
+    #[test]
+    fn slice_arrival_damages_only_waiting_inline_root() {
+        let provider = Arc::new(MockFontProvider::new(false));
+        let (mut doc, waiting, covered) = make_r7_doc(provider.clone());
+        doc.resolve(0.0);
+        // Only the CJK slice is scheduled; the Latin sibling is covered by the
+        // installed font (R7) and never fetches.
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec!["https://fonts.gstatic.com/s/notosanssc/v1/cjk.0.woff2".to_string()]
+        );
+
+        // Complete the CJK fetch with a valid OTF.
+        let (url, handler) = provider.handlers.lock().unwrap().remove(0);
+        handler.bytes(url, blitz_traits::net::Bytes::from(crate::BULLET_FONT.to_vec()));
+        doc.handle_messages();
+
+        // AE6: the inline root that actually re-shapes is re-damaged, while a
+        // covered sibling's inline root stays untouched. The inline root may
+        // be an ancestor of the recorded element (e.g. body), so resolve it
+        // at assertion time.
+        let waiting_root = doc
+            .get_node(waiting)
+            .and_then(|n| n.inline_root_ancestor().map(|root| root.id));
+        let covered_root = doc
+            .get_node(covered)
+            .and_then(|n| n.inline_root_ancestor().map(|root| root.id));
+        let waiting_root = waiting_root.expect("waiting text has an inline root");
+        let covered_root = covered_root.expect("covered text has an inline root");
+        let waiting_damaged = doc
+            .get_node(waiting_root)
+            .and_then(|n| n.damage())
+            .is_some();
+        let covered_damaged = doc
+            .get_node(covered_root)
+            .and_then(|n| n.damage())
+            .is_some();
+        assert!(
+            waiting_damaged,
+            "waiting inline root must be re-damaged on slice arrival (AE6)"
+        );
+        assert!(
+            !covered_damaged,
+            "covered sibling must not be re-damaged (targeted invalidation)"
+        );
+        assert_eq!(doc.font_version, 1);
+        assert!(doc.missing_font_coverage.is_empty());
+    }
+
+    /// Real WOFF2 slice bytes are decompressed and registered; corrupt
+    /// `wOF2`-magic payloads fail the slice instead of being marked Loaded.
+    #[test]
+    fn woff2_slice_decompresses_and_corrupt_payload_fails() {
+        let woff2 = include_bytes!("../../blitz-paint/assets/NotoColorEmoji-test.woff2");
+
+        // Real WOFF2: decompress + register under the "Noto Sans SC" alias.
+        let provider = Arc::new(MockFontProvider::new(false));
+        let mut doc = make_doc_with_text("中", provider.clone());
+        doc.resolve(0.0);
+        assert_eq!(provider.fetched.lock().unwrap().len(), 1);
+        let (url, handler) = provider.handlers.lock().unwrap().remove(0);
+        handler.bytes(url, blitz_traits::net::Bytes::from(woff2.to_vec()));
+        doc.handle_messages();
+        assert_eq!(doc.font_version, 1, "WOFF2 slice registers and bumps version");
+        assert!(doc.missing_font_coverage.is_empty());
+
+        // Corrupt `wOF2`-magic payload: decompression fails -> FontSliceFailed
+        // semantics (no registration, waiting map cleared, never retried).
+        let provider2 = Arc::new(MockFontProvider::new(false));
+        let mut doc2 = make_doc_with_text("中", provider2.clone());
+        doc2.resolve(0.0);
+        let (url2, handler2) = provider2.handlers.lock().unwrap().remove(0);
+        handler2.bytes(
+            url2,
+            blitz_traits::net::Bytes::from(vec![b'w', b'O', b'F', b'2', 0, 1, 2, 3]),
+        );
+        doc2.handle_messages();
+        assert_eq!(doc2.font_version, 0, "corrupt WOFF2 must not register");
+        assert!(
+            doc2.missing_font_coverage.is_empty(),
+            "corrupt slice must clear its waiting map"
+        );
+        doc2.resolve(0.0);
+        assert_eq!(
+            provider2.fetched.lock().unwrap().len(),
+            1,
+            "corrupt slice must not be re-fetched"
+        );
     }
 }

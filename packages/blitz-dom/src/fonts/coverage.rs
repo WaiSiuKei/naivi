@@ -208,11 +208,18 @@ mod tests {
     fn lookup_miss_scans_nothing() {
         let (mut idx, _, _) = index_with_two_slices();
         // U+10000 is above every interval end; the miss must scan nothing.
-        let probes_before = 0;
         let found = idx.lookup("Noto Sans", FontStyle::Normal, FontWeight::Normal, 0x10000);
         assert!(found.is_empty());
-        // Two binary searches only.
-        assert!(idx.last_probes() >= probes_before);
+        // A miss performs only the two O(log n) binary searches (start-sorted
+        // entries + prefix-max-end), never the candidate scan. Each search is
+        // at most ceil(log2(2)) + 1 = 2 comparisons on this fixture, so the
+        // total stays tightly bounded - pinning the O(log n) miss claim
+        // without coupling to a specific binary-search probe count.
+        let probes = idx.last_probes();
+        assert!(
+            (2..=4).contains(&probes),
+            "miss over 2 entries should cost ~2-4 comparisons, got {probes}"
+        );
     }
 
     #[test]

@@ -228,6 +228,7 @@ impl FontLoadState {
 
     pub fn fail(&mut self, url: &str) {
         self.loading.remove(url);
+        self.loaded.remove(url);
         self.failed.insert(url.to_owned(), ());
     }
 }
