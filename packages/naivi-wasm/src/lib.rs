@@ -61,15 +61,23 @@ const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.woff2");
 const DEFAULT_FONT_CSS_URL: &str = "https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700&family=Noto+Sans+SC:wght@400;700&family=Noto+Color+Emoji&display=swap";
 const RTL_FONT_CSS_URL: &str = "https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@400;700&family=Noto+Sans+Arabic:wght@400;700&display=swap";
 
-/// Fetch both Google Fonts stylesheets, parse the `@font-face` slices out of
-/// them, and register them on the document (U8). The document's pre-scan then
-/// fetches individual WOFF2 slices on demand during resolve; no explicit
-/// re-layout trigger is needed because `resolve` runs every frame.
+/// Fetch both Google Fonts stylesheets (concurrently), parse the `@font-face`
+/// slices out of them, and register them on the document (U8). The document's
+/// pre-scan then fetches individual WOFF2 slices on demand during resolve; no
+/// explicit re-layout trigger is needed because `resolve` runs every frame.
 fn bootstrap_fonts(doc: Rc<RefCell<NaiviDocument>>) {
     wasm_bindgen_futures::spawn_local(async move {
+        // The two stylesheets are independent network requests; await them in
+        // parallel so bootstrap latency is not doubled.
+        let (default, rtl) = futures::future::join(
+            net::fetch_text(DEFAULT_FONT_CSS_URL),
+            net::fetch_text(RTL_FONT_CSS_URL),
+        )
+        .await;
+
         let mut all_slices = Vec::new();
-        for url in [DEFAULT_FONT_CSS_URL, RTL_FONT_CSS_URL] {
-            match net::fetch_text(url).await {
+        for (url, css) in [(DEFAULT_FONT_CSS_URL, default), (RTL_FONT_CSS_URL, rtl)] {
+            match css {
                 Ok(css) => {
                     let slices = parse_font_css(&css);
                     info!("bootstrap: {url} -> {} slices", slices.len());

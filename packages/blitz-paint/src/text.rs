@@ -115,7 +115,7 @@ pub(crate) fn draw_glyphs_mono<'a>(
     doc: &BaseDocument,
     transform: Affine,
     scale: f64,
-    glyphs: impl Iterator<Item = parley::layout::Glyph>,
+    glyphs: impl Iterator<Item = parley::layout::Glyph> + Clone,
 ) {
     let run = glyph_run.run();
     let font = run.font();
@@ -142,10 +142,8 @@ pub(crate) fn draw_glyphs_mono<'a>(
         kurbo::Vec2::default()
     };
 
-    // Collect so `draw_glyphs` receives a `Clone` iterator (required by the
-    // anyrender signature) regardless of what the caller passed.
-    let glyphs: Vec<parley::layout::Glyph> = glyphs.collect();
-
+    // `draw_glyphs` requires a `Clone` iterator; both call sites pass one, so
+    // we stream instead of collecting a per-run Vec on the hot path.
     scene.draw_glyphs(
         font,
         font_size,
@@ -157,7 +155,7 @@ pub(crate) fn draw_glyphs_mono<'a>(
         1.0, // alpha
         transform,
         glyph_xform,
-        glyphs.iter().map(|glyph| anyrender::Glyph {
+        glyphs.map(|glyph| anyrender::Glyph {
             id: glyph.id as _,
             x: glyph.x,
             y: glyph.y,

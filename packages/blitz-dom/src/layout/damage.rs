@@ -395,80 +395,68 @@ impl HoistedPaintChildren {
 
 impl BaseDocument {
     pub(crate) fn invalidate_inline_contexts(&mut self) {
-        let scale = self.viewport.scale();
-
-        let font_ctx = &self.font_ctx;
-        let layout_ctx = &mut self.layout_ctx;
-
         let mut anon_nodes = Vec::new();
-
-        for (_, node) in self.nodes.iter_mut() {
-            if !(node.flags.contains(NodeFlags::IS_IN_DOCUMENT)) {
-                continue;
-            }
-
-            let Some(element) = node.data.downcast_element_mut() else {
-                continue;
-            };
-
-            if element.inline_layout_data.is_some() {
-                if node.is_anonymous() {
-                    anon_nodes.push(node.id);
-                } else {
-                    node.insert_damage(ALL_DAMAGE);
-                }
-            } else if let Some(input) = element.text_input_data_mut() {
-                input.editor.set_scale(scale);
-                let mut font_ctx = font_ctx.lock().unwrap();
-                input.editor.refresh_layout(&mut font_ctx, layout_ctx);
-                node.insert_damage(ONLY_RELAYOUT);
-            }
+        let ids: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.flags.contains(NodeFlags::IS_IN_DOCUMENT))
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            self.damage_inline_node(id, &mut anon_nodes);
         }
-
-        for node_id in anon_nodes {
-            if let Some(parent_id) = *(self.nodes[node_id].layout_parent.get_mut()) {
-                self.nodes[parent_id].insert_damage(ALL_DAMAGE);
-            }
-        }
+        self.damage_anonymous_parents(anon_nodes);
     }
 
     /// Targeted variant of [`Self::invalidate_inline_contexts`]: only the
     /// given nodes' inline contexts are re-damaged, so a newly registered font
     /// slice re-lays-out just the text that was waiting on it (R8 / AE6).
     pub(crate) fn invalidate_text_nodes(&mut self, node_ids: Vec<NodeId>) {
-        let scale = self.viewport.scale();
+        let mut anon_nodes = Vec::new();
+        for node_id in node_ids {
+            self.damage_inline_node(node_id, &mut anon_nodes);
+        }
+        self.damage_anonymous_parents(anon_nodes);
+    }
 
+    /// Damage one inline-context node: an element with inline layout data (or
+    /// an anonymous block) gets full damage, an input refreshes its editor
+    /// layout. Anonymous nodes are collected so their parent can be damaged
+    /// after the walk. Shared by [`Self::invalidate_inline_contexts`] and
+    /// [`Self::invalidate_text_nodes`].
+    fn damage_inline_node(&mut self, node_id: NodeId, anon_nodes: &mut Vec<NodeId>) {
+        let scale = self.viewport.scale();
         let font_ctx = &self.font_ctx;
         let layout_ctx = &mut self.layout_ctx;
 
-        let mut anon_nodes = Vec::new();
-
-        for node_id in node_ids {
-            let Some(node) = self.nodes.get_mut(node_id) else {
-                continue;
-            };
-            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
-                continue;
-            }
-
-            let Some(element) = node.data.downcast_element_mut() else {
-                continue;
-            };
-
-            if element.inline_layout_data.is_some() {
-                if node.is_anonymous() {
-                    anon_nodes.push(node.id);
-                } else {
-                    node.insert_damage(ALL_DAMAGE);
-                }
-            } else if let Some(input) = element.text_input_data_mut() {
-                input.editor.set_scale(scale);
-                let mut font_ctx = font_ctx.lock().unwrap();
-                input.editor.refresh_layout(&mut font_ctx, layout_ctx);
-                node.insert_damage(ONLY_RELAYOUT);
-            }
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
+            return;
         }
 
+        let Some(element) = node.data.downcast_element_mut() else {
+            return;
+        };
+
+        if element.inline_layout_data.is_some() {
+            if node.is_anonymous() {
+                anon_nodes.push(node.id);
+            } else {
+                node.insert_damage(ALL_DAMAGE);
+            }
+        } else if let Some(input) = element.text_input_data_mut() {
+            input.editor.set_scale(scale);
+            let mut font_ctx = font_ctx.lock().unwrap();
+            input.editor.refresh_layout(&mut font_ctx, layout_ctx);
+            node.insert_damage(ONLY_RELAYOUT);
+        }
+    }
+
+    /// Re-damage the parents of anonymous blocks collected during a damage
+    /// walk (anonymous boxes live under an element that must re-layout too).
+    fn damage_anonymous_parents(&mut self, anon_nodes: Vec<NodeId>) {
         for node_id in anon_nodes {
             if let Some(parent_id) = *(self.nodes[node_id].layout_parent.get_mut()) {
                 self.nodes[parent_id].insert_damage(ALL_DAMAGE);

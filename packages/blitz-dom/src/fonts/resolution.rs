@@ -91,8 +91,17 @@ impl FontResolutionPolicy {
     /// deduplicated. Used by the document pre-scan to add per-script fallback
     /// candidates when the CSS font-family has no coverage (R6).
     pub fn families_for_text(&self, text: &str) -> Vec<String> {
+        let units = resolution_units(text);
+        self.families_for_units(&units)
+    }
+
+    /// Noto family names for every script present in already-computed
+    /// resolution units, in policy order, deduplicated. The document pre-scan
+    /// segments text once and shares the units across the family pass and the
+    /// loader scan (U5 hot path).
+    pub fn families_for_units(&self, units: &[ResolutionUnit]) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
-        for unit in resolution_units(text) {
+        for unit in units {
             for font in self.candidates_for(unit.script) {
                 if !result.contains(&font.family) {
                     result.push(font.family);

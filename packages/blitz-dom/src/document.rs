@@ -1254,6 +1254,10 @@ impl BaseDocument {
             }
             DocumentEvent::FontSliceFailed { url } => {
                 self.font_loader.fail(&url);
+                // A failed slice is never retried this session (R4 / AE5);
+                // drop its waiting-node map entry so it does not pin stale
+                // node references for the document's lifetime.
+                self.missing_font_coverage.remove(&url);
             }
             DocumentEvent::NavigateIframe { node_id, url } => self.navigate_iframe(node_id, url),
         }
@@ -1277,6 +1281,19 @@ impl BaseDocument {
         if self.font_loader.slices().is_empty() {
             return;
         }
+        // Settle gate: once every slice is loaded or failed, no scan can
+        // schedule anything (`scan_text` only returns URLs in Loading /
+        // NotStarted), so skip the per-node walk entirely in steady state.
+        let has_pending = self.font_loader.slices().iter().any(|slice| {
+            matches!(
+                self.font_loader.status(&slice.url),
+                crate::fonts::slice::FontSliceStatus::Loading
+                    | crate::fonts::slice::FontSliceStatus::NotStarted
+            )
+        });
+        if !has_pending {
+            return;
+        }
 
         // Collect (text, inline-context element) pairs first so the node-tree
         // borrow ends before we mutate loader / coverage state.
@@ -1291,16 +1308,19 @@ impl BaseDocument {
             }
             // Text nodes carry no computed style; use the nearest element
             // ancestor (the inline context) for the font-family.
-            let Some(element_id) = self.nearest_element_ancestor(id) else {
+            let Some(element_id) = self.nearest_surviving_element_ancestor(id) else {
                 continue;
             };
-            scans.push((text.to_string(), element_id));
+            scans.push((text, element_id));
         }
 
         // Slice URLs to fetch this scan, plus the nodes each URL must re-layout
         // when it arrives.
         let mut to_fetch: Vec<String> = Vec::new();
         for (text, element_id) in scans {
+            // Resolution units are shared by the family pass and the loader
+            // scan so each text node is segmented exactly once (hot path).
+            let units = crate::fonts::resolution::resolution_units(&text);
             let (css_families, weight, style_kind, css_covered) = {
                 let Some(node) = self.get_node(element_id) else {
                     continue;
@@ -1360,7 +1380,7 @@ impl BaseDocument {
             // Candidate families: the CSS family list first, then the Noto
             // family for each script found in the text (R6).
             let mut candidates = css_families;
-            for family in self.font_resolution_policy.families_for_text(&text) {
+            for family in self.font_resolution_policy.families_for_units(&units) {
                 if !candidates.contains(&family) {
                     candidates.push(family);
                 }
@@ -1369,13 +1389,18 @@ impl BaseDocument {
             for family in candidates {
                 for url in self
                     .font_loader
-                    .scan_text(&text, &family, style_kind, weight)
+                    .scan_text_units(&text, &units, &family, style_kind, weight)
                 {
                     let is_new = !self.missing_font_coverage.contains_key(&url);
-                    self.missing_font_coverage
+                    let waiting = self
+                        .missing_font_coverage
                         .entry(url.clone())
-                        .or_default()
-                        .push(element_id);
+                        .or_default();
+                    // Dedupe: the same node is re-scanned every frame while a
+                    // slice is Loading.
+                    if !waiting.contains(&element_id) {
+                        waiting.push(element_id);
+                    }
                     if is_new {
                         to_fetch.push(url);
                     }
@@ -1431,6 +1456,7 @@ impl BaseDocument {
             // registration.
             let Some(decoded) = crate::net::decompress_font_bytes(&bytes) else {
                 self.font_loader.fail(&url);
+                self.missing_font_coverage.remove(&url);
                 continue;
             };
             let Some(pending) = self.font_loader.complete(&url, decoded) else {
@@ -1446,7 +1472,13 @@ impl BaseDocument {
             self.font_version += 1;
 
             if let Some(nodes) = self.missing_font_coverage.remove(&url) {
-                affected.extend(nodes);
+                // A node can wait on several slices (Latin + CJK + emoji);
+                // dedupe so it is damaged once per frame.
+                for node in nodes {
+                    if !affected.contains(&node) {
+                        affected.push(node);
+                    }
+                }
             }
         }
 
@@ -1471,20 +1503,6 @@ impl BaseDocument {
             self.build_request(parsed),
             Box::new(FontSliceHandler { tx }),
         );
-    }
-
-    /// The nearest element ancestor of `node_id` (used to read the computed
-    /// font-family for a text node).
-    fn nearest_element_ancestor(&self, node_id: NodeId) -> Option<NodeId> {
-        let mut current = self.get_node(node_id)?.parent;
-        while let Some(id) = current {
-            let node = self.get_node(id)?;
-            if node.is_element() {
-                return Some(id);
-            }
-            current = node.parent;
-        }
-        None
     }
 
     /// Whether the Document has pending requests for "critical" resources (that should block rendering)
@@ -3035,8 +3053,7 @@ fn installed_fonts_cover(
     families: &style::values::computed::font::FontFamilyList,
     font: &Font,
 ) -> bool {
-    use parley::fontique::{Attributes, QueryFont, QueryStatus};
-    use skrifa::MetadataProvider as _;
+    use parley::fontique::Attributes;
 
     let mut font_ctx = font_ctx.lock().unwrap();
     let font_ctx = &mut *font_ctx;
@@ -3052,20 +3069,9 @@ fn installed_fonts_cover(
         if crate::fonts::selection::is_default_ignorable(ch as u32) {
             continue;
         }
-        let mut covered = false;
-        query.matches_with(|q_font: &QueryFont| {
-            let Ok(font_ref) = skrifa::FontRef::from_index(q_font.blob.as_ref(), q_font.index)
-            else {
-                return QueryStatus::Continue;
-            };
-            if font_ref.charmap().map(ch).is_some() {
-                covered = true;
-                QueryStatus::Stop
-            } else {
-                QueryStatus::Continue
-            }
-        });
-        if !covered {
+        // Reuse the cmap-coverage check shared with the metrics path
+        // (font_metrics.rs).
+        if !crate::font_metrics::query_covers_char(&mut query, ch) {
             return false;
         }
     }

@@ -4686,6 +4686,7 @@ dependencies = [
  "blitz-shell",
  "blitz-traits",
  "console_error_panic_hook",
+ "futures",
  "js-sys",
  "naivi-dom",
  "parley",

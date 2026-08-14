@@ -8,7 +8,7 @@
 //! completion callback on the document's main thread.
 
 use crate::fonts::coverage::CoverageIndex;
-use crate::fonts::resolution::resolution_units;
+use crate::fonts::resolution::{resolution_units, ResolutionUnit};
 use crate::fonts::selection::{find_matching_slice_indexed, FontSliceRequest};
 use crate::fonts::slice::{FontLoadState, FontSlice, FontSliceStatus, PendingFontData};
 use crate::fonts::{FontDescriptor, FontStyle, FontWeight};
@@ -17,10 +17,14 @@ use crate::fonts::{FontDescriptor, FontStyle, FontWeight};
 #[derive(Default)]
 pub struct FontLoader {
     state: FontLoadState,
-    /// Coverage index kept in sync with the slice sets seen so far.
+    /// Coverage index kept in sync with the current slice set.
     coverage: CoverageIndex,
     /// All parsed Google Fonts slices known to this loader.
     slices: Vec<FontSlice>,
+    /// Whether `coverage` needs a full re-sync before the next scan. Only
+    /// `set_slices` changes the slice set, so re-syncing on every scan would
+    /// re-insert every range per text node per frame.
+    coverage_dirty: bool,
 }
 
 impl FontLoader {
@@ -29,9 +33,10 @@ impl FontLoader {
     }
 
     /// Replace the slice set (e.g. after a Google Fonts CSS fetch). The
-    /// coverage index re-syncs idempotently on the next scan.
+    /// coverage index re-syncs once on the next scan.
     pub fn set_slices(&mut self, slices: Vec<FontSlice>) {
         self.slices = slices;
+        self.coverage_dirty = true;
     }
 
     pub fn slices(&self) -> &[FontSlice] {
@@ -62,22 +67,39 @@ impl FontLoader {
         style: FontStyle,
         weight: FontWeight,
     ) -> Vec<String> {
-        // KTD5: keep the coverage index in sync with the slice set before
-        // querying. Insert is incremental and idempotent per (range, index),
-        // so re-scanning the same family's slices is a no-op.
-        for (i, slice) in self.slices.iter().enumerate() {
-            self.coverage.insert_slice(
-                &slice.family,
-                slice.font.style,
-                slice.font.weight,
-                &slice.ranges,
-                i,
-            );
+        let units = resolution_units(text);
+        self.scan_text_units(text, &units, family, style, weight)
+    }
+
+    /// Pre-scan over already-computed resolution units (avoids re-segmenting
+    /// the same text once per candidate family).
+    pub fn scan_text_units(
+        &mut self,
+        text: &str,
+        units: &[ResolutionUnit],
+        family: &str,
+        style: FontStyle,
+        weight: FontWeight,
+    ) -> Vec<String> {
+        // Re-sync the coverage index only when the slice set changed, not on
+        // every scan. Insert is incremental and idempotent per (range, index).
+        if self.coverage_dirty {
+            self.coverage.clear();
+            for (i, slice) in self.slices.iter().enumerate() {
+                self.coverage.insert_slice(
+                    &slice.family,
+                    slice.font.style,
+                    slice.font.weight,
+                    &slice.ranges,
+                    i,
+                );
+            }
+            self.coverage_dirty = false;
         }
 
         let font = FontDescriptor::new(family).with_style(style).with_weight(weight);
         let mut needed = Vec::new();
-        for unit in resolution_units(text) {
+        for unit in units {
             let request = FontSliceRequest {
                 font: font.clone(),
                 style,
@@ -85,7 +107,7 @@ impl FontLoader {
                 text,
             };
             let Some(slice) =
-                find_matching_slice_indexed(&mut self.coverage, &request, &unit, &self.slices)
+                find_matching_slice_indexed(&mut self.coverage, &request, unit, &self.slices)
             else {
                 continue;
             };
@@ -118,7 +140,7 @@ impl FontLoader {
             source_url: url.to_owned(),
             bytes,
         };
-        self.state.complete(url, pending.clone());
+        self.state.complete(url);
         Some(pending)
     }
 

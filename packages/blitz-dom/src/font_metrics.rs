@@ -17,6 +17,29 @@ pub(crate) struct BlitzFontMetricsProvider {
     pub(crate) font_ctx: Arc<Mutex<FontContext>>,
 }
 
+/// Whether the fontique query's current match covers `ch` (skrifa cmap
+/// check). Shared by the metrics path and the installed-fonts coverage gate in
+/// document.rs (`installed_fonts_cover`, U5 — the plan's "复用 find_font_for
+/// 的 cmap 检查").
+pub(crate) fn query_covers_char(query: &mut parley::fontique::Query, ch: char) -> bool {
+    use parley::fontique::{QueryFont, QueryStatus};
+    use skrifa::MetadataProvider;
+
+    let mut covered = false;
+    query.matches_with(|q_font: &QueryFont| {
+        let Ok(font_ref) = skrifa::FontRef::from_index(q_font.blob.as_ref(), q_font.index) else {
+            return QueryStatus::Continue;
+        };
+        if font_ref.charmap().map(ch).is_some() {
+            covered = true;
+            QueryStatus::Stop
+        } else {
+            QueryStatus::Continue
+        }
+    });
+    covered
+}
+
 impl core::fmt::Debug for BlitzFontMetricsProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "BlitzFontMetricsProvider")

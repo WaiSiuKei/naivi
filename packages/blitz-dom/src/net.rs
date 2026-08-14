@@ -288,27 +288,23 @@ struct FontFaceHandler {
     overrides: FontFaceOverrides,
 }
 
-/// Decompress WOFF / WOFF2 bytes to a raw font, sniffing magic bytes when no
-/// format hint is available. Raw TTF / OTF (or unsupported) bytes pass through
-/// unchanged. Returns `None` only when a known-compressed font fails to
-/// decompress. Shared by the `@font-face` path and the Google Fonts slice
-/// loader.
+/// Decompress WOFF / WOFF2 bytes to a raw font for registration, sniffing
+/// magic bytes. Raw TTF / OTF pass through unchanged. Returns `None` only when
+/// a known-compressed font fails to decompress. Used by the Google Fonts slice
+/// loader; the `@font-face` path keeps its own handling in
+/// `FontFaceHandler::parse`.
 pub(crate) fn decompress_font_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
-    if bytes.len() >= 4 {
-        match &bytes[0..4] {
-            // WOFF (v1) files begin with 0x774F4646 ('wOFF' in ascii)
-            // See: <https://w3c.github.io/woff/woff1/spec/Overview.html#WOFFHeader>
-            #[cfg(feature = "woff")]
-            b"wOFF" => return wuff::decompress_woff1(bytes).ok(),
-            // WOFF2 files begin with 0x774F4632 ('wOF2' in ascii)
-            // See: <https://w3c.github.io/woff/woff2/#woff20Header>
-            #[cfg(feature = "woff")]
-            b"wOF2" => return wuff::decompress_woff2(bytes).ok(),
-            _ => {}
-        }
+    let compressed = bytes.len() >= 4 && matches!(&bytes[0..4], b"wOFF" | b"wOF2");
+    let decoded = crate::util::decode_font_bytes(bytes);
+    let is_borrowed = matches!(&decoded, std::borrow::Cow::Borrowed(_));
+    // Without the `woff` feature, known-compressed bytes pass through raw
+    // (registration then fails to parse them, matching the previous behavior).
+    // With it, a borrowed result means decompression failed.
+    #[cfg(feature = "woff")]
+    if compressed && is_borrowed {
+        return None;
     }
-    // Raw TTF / OTF (or unsupported) passes through unchanged.
-    Some(bytes.to_vec())
+    Some(decoded.into_owned())
 }
 impl NetHandler for ResourceHandler<FontFaceHandler> {
     fn bytes(mut self: Box<Self>, resolved_url: String, bytes: Bytes) {

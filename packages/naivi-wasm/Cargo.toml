@@ -29,6 +29,7 @@ console_error_panic_hook = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = "0.3"
+futures = "0.3"
 tracing-wasm = { workspace = true }
 tracing = { workspace = true }
 web-sys = { workspace = true, features = [

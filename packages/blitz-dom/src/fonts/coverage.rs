@@ -44,6 +44,12 @@ impl CoverageIndex {
         Self::default()
     }
 
+    /// Drop all groups. Called by the loader when the slice set is replaced
+    /// (`set_slices`), so stale ranges from a previous set are not queried.
+    pub fn clear(&mut self) {
+        self.groups.clear();
+    }
+
     /// Incrementally insert one slice's unicode ranges into its
     /// `(family, style, weight)` group.
     ///
@@ -133,23 +139,17 @@ impl CoverageIndex {
     }
 
     /// Binary search for the first index where `pred` is false, returning
-    /// `(partition index, comparisons performed)`.
+    /// `(partition index, comparisons performed)` — std `partition_point` with
+    /// the probe count folded into the predicate.
     fn partition_point(
         entries: &[IntervalEntry],
         pred: impl Fn(&IntervalEntry) -> bool,
     ) -> (usize, usize) {
-        let mut lo = 0usize;
-        let mut hi = entries.len();
         let mut probes = 0usize;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
+        let lo = entries.partition_point(|e| {
             probes += 1;
-            if pred(&entries[mid]) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
+            pred(e)
+        });
         (lo, probes)
     }
 
@@ -157,18 +157,11 @@ impl CoverageIndex {
     /// value >= `cp` (the earliest possibly-covering entry), returning
     /// `(index, comparisons performed)`.
     fn partition_point_prefix(prefix_max_end: &[u32], len: usize, cp: u32) -> (usize, usize) {
-        let mut lo = 0usize;
-        let mut hi = len;
         let mut probes = 0usize;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
+        let lo = prefix_max_end[..len].partition_point(|&v| {
             probes += 1;
-            if prefix_max_end[mid] < cp {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
+            v < cp
+        });
         (lo, probes)
     }
 

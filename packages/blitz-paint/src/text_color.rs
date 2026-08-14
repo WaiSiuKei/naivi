@@ -63,7 +63,9 @@ struct CacheKey {
     index: u32,
     glyph: u32,
     size_bits: u32,
-    coords: Vec<i16>,
+    /// FNV-1a hash of the normalized variation coordinates (avoids a Vec
+    /// allocation per glyph on the draw path).
+    coords_hash: u64,
 }
 
 struct CachedGlyph {
@@ -117,17 +119,18 @@ impl ColorGlyphCache {
             },
         );
         self.next += 1;
-        while self.bytes > self.byte_budget {
-            let Some(evict) = self
-                .map
-                .iter()
-                .min_by_key(|(_, e)| e.stamp)
-                .map(|(k, _)| k.clone())
-            else {
-                break;
-            };
-            if let Some(entry) = self.map.remove(&evict) {
-                self.bytes -= entry.bytes;
+        if self.bytes > self.byte_budget {
+            // Evict least-recently-used entries in one pass (sorted by stamp)
+            // rather than re-scanning the map once per eviction.
+            let mut order: Vec<CacheKey> = self.map.keys().cloned().collect();
+            order.sort_by_key(|k| self.map[k].stamp);
+            for key in order {
+                if self.bytes <= self.byte_budget {
+                    break;
+                }
+                if let Some(entry) = self.map.remove(&key) {
+                    self.bytes -= entry.bytes;
+                }
             }
         }
     }
@@ -166,7 +169,7 @@ fn color_glyph(
         index,
         glyph,
         size_bits: font_size.to_bits(),
-        coords: coords.to_vec(),
+        coords_hash: hash_coords(coords),
     };
     if let Some(hit) = GLYPH_CACHE.with(|c| c.borrow_mut().get(&key)) {
         return Some(hit);
@@ -178,6 +181,16 @@ fn color_glyph(
             .insert(key, Arc::clone(&raster), offset_x, offset_y)
     });
     Some((raster, offset_x, offset_y))
+}
+
+/// FNV-1a hash of normalized variation coordinates for the cache key.
+fn hash_coords(coords: &[i16]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &c in coords {
+        h ^= c as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// Draw one glyph run's color glyphs as rasterized images (COLRv1).
@@ -690,7 +703,7 @@ mod tests {
             index: 0,
             glyph: 1,
             size_bits: 32.0f32.to_bits(),
-            coords: vec![],
+            coords_hash: 0,
         };
         let raster = Arc::new(RasterImageData::new(4, 4, Arc::new(vec![0u8; 4 * 4 * 4])));
         cache.insert(key.clone(), raster, 0, 0);
@@ -701,7 +714,7 @@ mod tests {
             index: 0,
             glyph: 2,
             size_bits: 32.0f32.to_bits(),
-            coords: vec![],
+            coords_hash: 0,
         };
         let raster2 = Arc::new(RasterImageData::new(4, 4, Arc::new(vec![1u8; 4 * 4 * 4])));
         cache.insert(key2.clone(), raster2, 0, 0);

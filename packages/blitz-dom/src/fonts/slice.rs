@@ -174,8 +174,6 @@ pub struct FontLoadState {
     pub loading: HashMap<String, ()>,
     /// Set of font slice URLs that failed to load.
     pub failed: HashMap<String, ()>,
-    /// Pending font data to be installed after decoding.
-    pub pending: Vec<PendingFontData>,
 }
 
 /// Decoded font bytes plus the metadata required for registration.
@@ -223,19 +221,14 @@ impl FontLoadState {
         true
     }
 
-    pub fn complete(&mut self, url: &str, pending: PendingFontData) {
+    pub fn complete(&mut self, url: &str) {
         self.loading.remove(url);
         self.loaded.insert(url.to_owned(), ());
-        self.pending.push(pending);
     }
 
     pub fn fail(&mut self, url: &str) {
         self.loading.remove(url);
         self.failed.insert(url.to_owned(), ());
-    }
-
-    pub fn take_pending(&mut self) -> Vec<PendingFontData> {
-        std::mem::take(&mut self.pending)
     }
 }
 
@@ -334,19 +327,9 @@ mod tests {
         assert_eq!(state.status(url), FontSliceStatus::Loading);
         // Re-begin while loading is refused
         assert!(!state.begin(url));
-        state.complete(
-            url,
-            PendingFontData {
-                family: "Noto Sans".into(),
-                weight: FontWeight::Normal,
-                style: FontStyle::Normal,
-                source_url: url.into(),
-                bytes: vec![1, 2, 3],
-            },
-        );
+        state.complete(url);
         assert_eq!(state.status(url), FontSliceStatus::Loaded);
         assert!(!state.begin(url));
-        assert_eq!(state.take_pending().len(), 1);
 
         // A failed URL never retries within the session
         let bad = "https://example.com/bad.woff2";
