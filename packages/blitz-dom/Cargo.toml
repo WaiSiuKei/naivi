@@ -68,6 +68,7 @@ skrifa = { workspace = true }
 linebender_resource_handle = { workspace = true }
 color = { workspace = true }
 kurbo = { workspace = true }
+unicode-segmentation = "1"
 
 # Other dependencies
 slotmap = { workspace = true }
