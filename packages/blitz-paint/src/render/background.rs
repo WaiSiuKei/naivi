@@ -448,7 +448,7 @@ impl ElementCx<'_, '_> {
                 scene.fill(
                     peniko::Fill::NonZero,
                     transform,
-                    to_peniko_image(image_data, quality).as_ref(),
+                    to_peniko_image(image_data, quality, peniko::ImageAlphaType::Alpha).as_ref(),
                     None,
                     &tile_rect,
                 );

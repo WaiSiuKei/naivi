@@ -2,13 +2,11 @@ use anyrender::PaintScene;
 use blitz_dom::{BaseDocument, NodeId, node::{RasterImageData, TextBrush}, util::ToColorColor};
 use kurbo::{Affine, Rect, Stroke, Vec2};
 use parley::{Affinity, Cursor, GlyphRun, Layout, Line, PositionedLayoutItem, Selection};
-use peniko::{Fill, ImageQuality};
+use peniko::{Fill, ImageAlphaType, ImageQuality};
 use style::values::computed::TextDecorationLine;
 
 #[cfg(target_os = "macos")]
 use blitz_macos_text; // native CoreText glyph rasterization (naivi)
-#[cfg(target_os = "macos")]
-use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use crate::render::to_peniko_image;
 
@@ -224,12 +222,27 @@ fn draw_glyph_run_native<'a>(
     };
     let font = blitz_macos_text::resolve_font(key);
 
+    // Rasterize in the run's CSS text color (the CoreGraphics path fills
+    // with the context color; without this every glyph would render black).
+    let style = glyph_run.style();
+    let text_color = doc
+        .get_node(style.brush.id)
+        .unwrap()
+        .primary_styles()
+        .unwrap()
+        .get_inherited_text()
+        .color
+        .as_color_color();
+    let rgba = text_color.to_rgba8();
+
     for glyph in glyph_run.positioned_glyphs() {
-        let Some(bmp) = blitz_macos_text::rasterize_glyph(&font, glyph.id) else {
+        let Some(bmp) = blitz_macos_text::rasterize_glyph(&font, glyph.id, [rgba.r, rgba.g, rgba.b])
+        else {
             continue;
         };
-        let raster = RasterImageData::new(bmp.width, bmp.height, Arc::new(bmp.data.to_vec()));
-        let brush = to_peniko_image(&raster, ImageQuality::Medium);
+        let raster = RasterImageData::new(bmp.width, bmp.height, bmp.data.clone());
+        let brush =
+            to_peniko_image(&raster, ImageQuality::Medium, ImageAlphaType::AlphaPremultiplied);
         let x = (glyph.x + bmp.offset_x) as f64;
         let y = (glyph.y + bmp.offset_y) as f64;
         let t = transform.pre_translate(Vec2::new(x, y));

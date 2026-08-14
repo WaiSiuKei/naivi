@@ -564,6 +564,7 @@ fn to_image_quality(image_rendering: ImageRendering) -> peniko::ImageQuality {
 pub(crate) fn to_peniko_image(
     image: &RasterImageData,
     quality: peniko::ImageQuality,
+    alpha_type: peniko::ImageAlphaType,
 ) -> peniko::ImageBrush {
     peniko::ImageBrush {
         image: ImageData {
@@ -571,7 +572,7 @@ pub(crate) fn to_peniko_image(
             format: peniko::ImageFormat::Rgba8,
             width: image.width,
             height: image.height,
-            alpha_type: peniko::ImageAlphaType::Alpha,
+            alpha_type,
         },
         sampler: ImageSampler {
             x_extend: peniko::Extend::Repeat,
@@ -1020,7 +1021,10 @@ impl ElementCx<'_, '_> {
                 .pre_translate(Vec2 { x, y })
                 .pre_scale_non_uniform(x_scale, y_scale);
 
-            scene.draw_image(to_peniko_image(image, quality).as_ref(), transform);
+            scene.draw_image(
+                to_peniko_image(image, quality, peniko::ImageAlphaType::Alpha).as_ref(),
+                transform,
+            );
         }
     }
 
