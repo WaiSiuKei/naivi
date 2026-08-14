@@ -206,8 +206,24 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
   );
   // Blocking: the guest owns the window event loop until it closes. Pass argv
   // directly (no shell interpolation) so paths with $/backticks/quotes work.
-  execFileSync('cargo', ['run', '-p', nativeCrate, '--', ...guestArgs], {
-    cwd: root,
-    stdio: 'inherit',
-  });
+  try {
+    execFileSync('cargo', ['run', '-p', nativeCrate, '--', ...guestArgs], {
+      cwd: root,
+      stdio: 'inherit',
+    });
+  } catch (error) {
+    // Ctrl+C (or an external kill) sends a signal to the whole process group;
+    // the guest's signal-terminated exit makes execFileSync throw. That is a
+    // normal quit path — exit cleanly instead of dumping a "Command failed"
+    // stack trace. A child killed by a signal has `status === null` and a
+    // `signal`; a real non-zero exit keeps `status` set and must rethrow.
+    const childError = error as {
+      status?: number | null;
+      signal?: NodeJS.Signals | null;
+    };
+    if (childError.status === null && childError.signal) {
+      process.exit(0);
+    }
+    throw error;
+  }
 }
