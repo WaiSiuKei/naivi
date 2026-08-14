@@ -18,13 +18,9 @@ pub mod resolution;
 pub mod selection;
 pub mod slice;
 
-pub use coverage::CoverageIndex;
 pub use loader::FontLoader;
-pub use resolution::{FontResolutionPolicy, ResolutionUnit, TextScript, resolution_units};
-pub use selection::{
-    FontSliceRequest, find_matching_slice, find_matching_slice_indexed, is_codepoint_covered,
-};
-pub use slice::{FontLoadState, FontSlice, FontSliceStatus, PendingFontData, parse_font_css};
+pub use resolution::FontResolutionPolicy;
+pub use slice::FontSlice;
 
 /// Weight of a font, from 100 (Thin) to 900 (Black).
 ///

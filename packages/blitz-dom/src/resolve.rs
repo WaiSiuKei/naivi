@@ -93,6 +93,13 @@ impl BaseDocument {
         self.resolve_layout_children();
         timer.record_time("construct");
 
+        // Pre-scan text nodes for missing Google Fonts coverage and schedule
+        // slice fetches. Runs after styles are resolved (computed font-family
+        // is available on element ancestors) and before shaping. With no
+        // Google Fonts slices installed this is a no-op.
+        self.scan_text_nodes_for_fonts();
+        timer.record_time("font-scan");
+
         self.resolve_deferred_tasks();
         timer.record_time("pconstruct");
 

@@ -21,7 +21,7 @@ use crate::{
 use blitz_traits::devtools::DevtoolSettings;
 use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData, HitResult, UiEvent};
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
-use blitz_traits::net::{AbortSignal, DummyNetProvider, NetProvider, Request};
+use blitz_traits::net::{AbortSignal, Bytes, DummyNetProvider, NetProvider, Request};
 use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::{ColorScheme, DummyShellProvider, ShellProvider, Viewport};
 use cursor_icon::CursorIcon;
@@ -180,6 +180,15 @@ impl Document for Rc<RefCell<BaseDocument>> {
 
 pub enum DocumentEvent {
     ResourceLoad(ResourceLoadResponse),
+    /// A Google Fonts slice finished downloading; bytes are WOFF2.
+    FontSliceLoaded {
+        url: String,
+        bytes: Bytes,
+    },
+    /// A Google Fonts slice fetch failed (network / CORS / non-2xx).
+    FontSliceFailed {
+        url: String,
+    },
     /// A navigation originating from within an iframe's sub-document
     /// (e.g. a link click), to be applied to the iframe identified by `node_id`.
     NavigateIframe {
@@ -247,6 +256,21 @@ pub struct BaseDocument {
     pub(crate) thread_font_contexts: ThreadLocal<RefCell<Box<FontContext>>>,
     /// A Parley layout context
     pub(crate) layout_ctx: parley::LayoutContext<TextBrush>,
+
+    // On-demand Google Fonts slice loading (wasm; inert without slices)
+    /// Google Fonts slice loader: coverage index, load state, parsed slices.
+    pub(crate) font_loader: crate::fonts::FontLoader,
+    /// Per-script Noto fallback policy used by the pre-scan (R6).
+    pub(crate) font_resolution_policy: crate::fonts::FontResolutionPolicy,
+    /// Bumped on every successful Google Fonts slice registration; drives
+    /// FontVersion-gated targeted invalidation.
+    pub(crate) font_version: u64,
+    /// Slice URLs waiting to be fetched, mapped to the element nodes that
+    /// need them (for targeted invalidation on arrival).
+    pub(crate) missing_font_coverage: HashMap<String, Vec<NodeId>>,
+    /// Slice arrivals drained from the event channel in this frame, registered
+    /// and invalidated together (frame-level coalescing).
+    pending_font_arrivals: Vec<(String, Bytes)>,
 
     /// The real (non-anonymous) node which is currently hovered (if any).
     /// This is never a layout-generated (anonymous) node, so it remains valid
@@ -474,6 +498,12 @@ impl BaseDocument {
             #[cfg(feature = "parallel-construct")]
             thread_font_contexts: ThreadLocal::new(),
             layout_ctx: parley::LayoutContext::new(),
+
+            font_loader: crate::fonts::FontLoader::new(),
+            font_resolution_policy: crate::fonts::FontResolutionPolicy::noto_default(),
+            font_version: 0,
+            missing_font_coverage: HashMap::new(),
+            pending_font_arrivals: Vec::new(),
 
             hover_node_id: None,
             hover_hit_node_id: None,
@@ -1210,13 +1240,251 @@ impl BaseDocument {
 
         // Put Reciever back
         self.rx = Some(rx);
+
+        // Register any font slices that arrived this frame and invalidate the
+        // waiting text nodes exactly once (frame-level coalescing).
+        self.apply_pending_font_arrivals();
     }
 
     pub fn handle_message(&mut self, msg: DocumentEvent) {
         match msg {
             DocumentEvent::ResourceLoad(resource) => self.load_resource(resource),
+            DocumentEvent::FontSliceLoaded { url, bytes } => {
+                self.pending_font_arrivals.push((url, bytes));
+            }
+            DocumentEvent::FontSliceFailed { url } => {
+                self.font_loader.fail(&url);
+            }
             DocumentEvent::NavigateIframe { node_id, url } => self.navigate_iframe(node_id, url),
         }
+    }
+
+    /// Install parsed Google Fonts slices (from a fetched Google Fonts CSS)
+    /// into the document's loader. With no slices installed the pre-scan and
+    /// fetch paths are inert, so native documents are unaffected.
+    pub fn set_google_font_slices(&mut self, slices: Vec<crate::fonts::FontSlice>) {
+        self.font_loader.set_slices(slices);
+    }
+
+    /// Pre-scan text nodes for missing Google Fonts coverage and schedule
+    /// slice fetches.
+    ///
+    /// Runs after styles are resolved and before shaping (see resolve.rs): at
+    /// that point computed `font-family` is available on element ancestors and
+    /// anonymous blocks already exist. A text node is skipped when an
+    /// installed font already covers its visible characters (R7 / AE2).
+    pub(crate) fn scan_text_nodes_for_fonts(&mut self) {
+        if self.font_loader.slices().is_empty() {
+            return;
+        }
+
+        // Collect (text, inline-context element) pairs first so the node-tree
+        // borrow ends before we mutate loader / coverage state.
+        let mut scans: Vec<(String, NodeId)> = Vec::new();
+        for (id, node) in self.nodes.iter() {
+            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) || !node.is_text_node() {
+                continue;
+            }
+            let text = node.text_content();
+            if text.is_empty() {
+                continue;
+            }
+            // Text nodes carry no computed style; use the nearest element
+            // ancestor (the inline context) for the font-family.
+            let Some(element_id) = self.nearest_element_ancestor(id) else {
+                continue;
+            };
+            scans.push((text.to_string(), element_id));
+        }
+
+        // Slice URLs to fetch this scan, plus the nodes each URL must re-layout
+        // when it arrives.
+        let mut to_fetch: Vec<String> = Vec::new();
+        for (text, element_id) in scans {
+            let (css_families, weight, style_kind, css_covered) = {
+                let Some(node) = self.get_node(element_id) else {
+                    continue;
+                };
+                let Some(style) = node.primary_styles() else {
+                    continue;
+                };
+                let font = style.get_font();
+
+                let weight =
+                    crate::fonts::FontWeight::from_u16(font.font_weight.value() as u16)
+                        .unwrap_or(crate::fonts::FontWeight::Normal);
+                let style_kind = match font.font_style {
+                    style::values::computed::font::FontStyle::NORMAL => {
+                        crate::fonts::FontStyle::Normal
+                    }
+                    style::values::computed::font::FontStyle::ITALIC => {
+                        crate::fonts::FontStyle::Italic
+                    }
+                    _ => crate::fonts::FontStyle::Oblique,
+                };
+
+                // CSS family list (generic families map to Noto Sans; we only
+                // carry Noto families in the Google Fonts set).
+                let mut css_families: Vec<String> = Vec::new();
+                for family in font.font_family.families.iter() {
+                    let name = match family {
+                        style::values::computed::font::SingleFontFamily::FamilyName(n) => {
+                            n.name.as_ref().to_string()
+                        }
+                        style::values::computed::font::SingleFontFamily::Generic(_) => {
+                            "Noto Sans".to_string()
+                        }
+                    };
+                    if !css_families.contains(&name) {
+                        css_families.push(name);
+                    }
+                }
+
+                // Installed-font coverage gate (R7): if every visible character
+                // is already covered by an installed font, don't schedule
+                // Google slices for this node.
+                let css_covered = installed_fonts_cover(
+                    &self.font_ctx,
+                    &text,
+                    &font.font_family.families,
+                    font,
+                );
+
+                (css_families, weight, style_kind, css_covered)
+            };
+
+            if css_covered {
+                continue;
+            }
+
+            // Candidate families: the CSS family list first, then the Noto
+            // family for each script found in the text (R6).
+            let mut candidates = css_families;
+            for family in self.font_resolution_policy.families_for_text(&text) {
+                if !candidates.contains(&family) {
+                    candidates.push(family);
+                }
+            }
+
+            for family in candidates {
+                for url in self
+                    .font_loader
+                    .scan_text(&text, &family, style_kind, weight)
+                {
+                    let is_new = !self.missing_font_coverage.contains_key(&url);
+                    self.missing_font_coverage
+                        .entry(url.clone())
+                        .or_default()
+                        .push(element_id);
+                    if is_new {
+                        to_fetch.push(url);
+                    }
+                }
+            }
+        }
+
+        for url in to_fetch {
+            self.fetch_font_slice(&url);
+        }
+    }
+
+    /// Register decoded font bytes with a family alias into the parley
+    /// collection (shared by `@font-face` and Google Fonts slice paths),
+    /// mirroring into thread-local font contexts under `parallel-construct`.
+    fn register_font_with_override(
+        &mut self,
+        font: Blob<u8>,
+        info_override: parley::fontique::FontInfoOverride<'_>,
+    ) {
+        // TODO: Investigate eliminating double-box
+        let mut global_font_ctx = self.font_ctx.lock().unwrap();
+        global_font_ctx
+            .collection
+            .register_fonts(font.clone(), Some(info_override));
+
+        #[cfg(feature = "parallel-construct")]
+        {
+            rayon::broadcast(|_ctx| {
+                let mut font_ctx = self
+                    .thread_font_contexts
+                    .get_or(|| RefCell::new(Box::new(global_font_ctx.clone())))
+                    .borrow_mut();
+                font_ctx
+                    .collection
+                    .register_fonts(font.clone(), Some(info_override));
+            });
+        }
+    }
+
+    /// Register all font slices that arrived this frame: decompress, install
+    /// into the fontique collection, bump the FontVersion, then re-layout the
+    /// waiting text nodes exactly once (frame-level coalescing).
+    fn apply_pending_font_arrivals(&mut self) {
+        if self.pending_font_arrivals.is_empty() {
+            return;
+        }
+        let arrivals = std::mem::take(&mut self.pending_font_arrivals);
+        let mut affected: Vec<NodeId> = Vec::new();
+
+        for (url, bytes) in arrivals {
+            // Google Fonts slices are WOFF2; decompress to a raw font before
+            // registration.
+            let Some(decoded) = crate::net::decompress_font_bytes(&bytes) else {
+                self.font_loader.fail(&url);
+                continue;
+            };
+            let Some(pending) = self.font_loader.complete(&url, decoded) else {
+                continue;
+            };
+            let info_override = parley::fontique::FontInfoOverride {
+                family_name: Some(&pending.family),
+                weight: Some(pending.weight.to_fontique()),
+                style: Some(pending.style.to_fontique()),
+                ..Default::default()
+            };
+            self.register_font_with_override(Blob::new(Arc::new(pending.bytes)), info_override);
+            self.font_version += 1;
+
+            if let Some(nodes) = self.missing_font_coverage.remove(&url) {
+                affected.extend(nodes);
+            }
+        }
+
+        if !affected.is_empty() {
+            self.invalidate_text_nodes(affected);
+            self.shell_provider.request_redraw();
+        }
+    }
+
+    /// Issue a Google Fonts slice fetch; completion / failure is routed back
+    /// through a `DocumentEvent` so registration and invalidation run on the
+    /// document's main thread (mirrors `ResourceHandler::respond`).
+    fn fetch_font_slice(&mut self, url: &str) {
+        let Ok(parsed) = url::Url::parse(url) else {
+            self.font_loader.fail(url);
+            return;
+        };
+        let doc_id = self.id;
+        let tx = self.tx.clone();
+        self.net_provider.fetch(
+            doc_id,
+            self.build_request(parsed),
+            Box::new(FontSliceHandler { tx }),
+        );
+    }
+
+    /// The nearest element ancestor of `node_id` (used to read the computed
+    /// font-family for a text node).
+    fn nearest_element_ancestor(&self, node_id: NodeId) -> Option<NodeId> {
+        let mut current = self.get_node(node_id)?.parent;
+        while let Some(id) = current {
+            let node = self.get_node(id)?;
+            if node.is_element() {
+                return Some(id);
+            }
+            current = node.parent;
+        }
+        None
     }
 
     /// Whether the Document has pending requests for "critical" resources (that should block rendering)
@@ -1298,26 +1566,7 @@ impl BaseDocument {
                     style: overrides.style,
                     ..Default::default()
                 };
-
-                // TODO: Investigate eliminating double-box
-                let mut global_font_ctx = self.font_ctx.lock().unwrap();
-                global_font_ctx
-                    .collection
-                    .register_fonts(font.clone(), Some(info_override));
-
-                #[cfg(feature = "parallel-construct")]
-                {
-                    rayon::broadcast(|_ctx| {
-                        let mut font_ctx = self
-                            .thread_font_contexts
-                            .get_or(|| RefCell::new(Box::new(global_font_ctx.clone())))
-                            .borrow_mut();
-                        font_ctx
-                            .collection
-                            .register_fonts(font.clone(), Some(info_override));
-                    });
-                }
-                drop(global_font_ctx);
+                self.register_font_with_override(font, info_override);
 
                 // TODO: see if we can only invalidate if resolved fonts may have changed
                 self.invalidate_inline_contexts();
@@ -2755,6 +3004,74 @@ impl BaseDocument {
     }
 }
 
+/// Completion handler for a Google Fonts slice fetch. Routes the bytes (or
+/// the failure) back through a `DocumentEvent` so registration and targeted
+/// invalidation run on the document's main thread (mirrors
+/// `ResourceHandler::respond`).
+struct FontSliceHandler {
+    tx: Sender<DocumentEvent>,
+}
+
+impl blitz_traits::net::NetHandler for FontSliceHandler {
+    fn bytes(self: Box<Self>, resolved_url: String, bytes: Bytes) {
+        let _ = self.tx.send(DocumentEvent::FontSliceLoaded {
+            url: resolved_url,
+            bytes,
+        });
+    }
+
+    fn error(self: Box<Self>, resolved_url: String) {
+        let _ = self.tx.send(DocumentEvent::FontSliceFailed { url: resolved_url });
+    }
+}
+
+/// Whether every visible character in `text` is covered by an installed font
+/// under the given computed font-family query (R7: author fonts / DejaVu keep
+/// their priority and no Google slice is scheduled). Default-ignorable code
+/// points are exempt (A1).
+fn installed_fonts_cover(
+    font_ctx: &Arc<Mutex<FontContext>>,
+    text: &str,
+    families: &style::values::computed::font::FontFamilyList,
+    font: &Font,
+) -> bool {
+    use parley::fontique::{Attributes, QueryFont, QueryStatus};
+    use skrifa::MetadataProvider as _;
+
+    let mut font_ctx = font_ctx.lock().unwrap();
+    let font_ctx = &mut *font_ctx;
+    let mut query = font_ctx.collection.query(&mut font_ctx.source_cache);
+    query.set_families(families.iter().map(crate::stylo_to_parley::query_font_family));
+    query.set_attributes(Attributes {
+        width: crate::stylo_to_parley::font_width(font.font_stretch),
+        weight: crate::stylo_to_parley::font_weight(font.font_weight),
+        style: crate::stylo_to_parley::font_style(font.font_style),
+    });
+
+    for ch in text.chars() {
+        if crate::fonts::selection::is_default_ignorable(ch as u32) {
+            continue;
+        }
+        let mut covered = false;
+        query.matches_with(|q_font: &QueryFont| {
+            let Ok(font_ref) = skrifa::FontRef::from_index(q_font.blob.as_ref(), q_font.index)
+            else {
+                return QueryStatus::Continue;
+            };
+            if font_ref.charmap().map(ch).is_some() {
+                covered = true;
+                QueryStatus::Stop
+            } else {
+                QueryStatus::Continue
+            }
+        });
+        if !covered {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoundingRect {
     pub x: f64,
@@ -2936,5 +3253,145 @@ mod font_face_override_tests {
             "registered family should report the CSS-declared name, \
              not the font file's internal `name` table entry",
         );
+    }
+}
+
+#[cfg(test)]
+mod font_slice_tests {
+    use super::*;
+    use crate::fonts::slice::parse_font_css;
+    use crate::{Attribute, qual_name};
+    use blitz_traits::shell::ColorScheme;
+
+    /// A mock provider that records every requested URL. When `fail` is set it
+    /// errors the handler immediately; otherwise it stores the handler for
+    /// manual completion.
+    struct MockFontProvider {
+        fetched: std::sync::Mutex<Vec<String>>,
+        handlers: std::sync::Mutex<Vec<(String, Box<dyn blitz_traits::net::NetHandler>)>>,
+        fail: bool,
+    }
+
+    impl MockFontProvider {
+        fn new(fail: bool) -> Self {
+            Self {
+                fetched: std::sync::Mutex::new(Vec::new()),
+                handlers: std::sync::Mutex::new(Vec::new()),
+                fail,
+            }
+        }
+    }
+
+    impl NetProvider for MockFontProvider {
+        fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn blitz_traits::net::NetHandler>) {
+            let url = request.url.to_string();
+            self.fetched.lock().unwrap().push(url.clone());
+            if self.fail {
+                handler.error(url);
+            } else {
+                self.handlers.lock().unwrap().push((url, handler));
+            }
+        }
+        fn is_noop(&self) -> bool {
+            false
+        }
+    }
+
+    const GOOGLE_CSS: &str = r#"
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/notosans/v1/latin.0.woff2) format('woff2');
+  unicode-range: U+0000-00FF;
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/notosanssc/v1/cjk.0.woff2) format('woff2');
+  unicode-range: U+4E00-9FFF;
+}
+"#;
+
+    /// A document with one `div` containing `text`, Google slices installed,
+    /// and a font context with system fonts disabled so coverage is
+    /// deterministic (only the bundled bullet font is installed).
+    fn make_doc_with_text(text: &str, provider: Arc<MockFontProvider>) -> BaseDocument {
+        let font_ctx = {
+            use parley::fontique::{Collection, CollectionOptions, SourceCache};
+            let mut ctx = FontContext {
+                source_cache: SourceCache::new_shared(),
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+            };
+            ctx.collection
+                .register_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
+            ctx
+        };
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            net_provider: Some(provider),
+            font_ctx: Some(font_ctx),
+            ..Default::default()
+        });
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let div = mutator.create_element(qual_name!("div"), vec![]);
+        let text = mutator.create_text_node(text);
+        mutator.append_children(div, &[text]);
+        mutator.append_children(body, &[div]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+        doc
+    }
+
+    /// 中 is outside the latin slice; the default generic sans-serif maps to
+    /// Noto Sans (no match), and the CJK script fallback resolves Noto Sans SC
+    /// → the cjk.0.woff2 slice is scheduled. The immediate error marks it
+    /// failed; a second resolve must not re-fetch.
+    #[test]
+    fn pre_scan_schedules_slice_fetch_for_uncovered_text() {
+        let provider = Arc::new(MockFontProvider::new(true));
+        let mut doc = make_doc_with_text("中", provider.clone());
+        doc.resolve(0.0);
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec!["https://fonts.gstatic.com/s/notosanssc/v1/cjk.0.woff2".to_string()]
+        );
+        doc.resolve(0.0);
+        assert_eq!(provider.fetched.lock().unwrap().len(), 1, "failed slice must not re-fetch");
+        assert_eq!(doc.font_version, 0);
+    }
+
+    /// Pins the URL-dedup + completion path end to end: the CJK slice is
+    /// fetched, its bytes are registered under the Noto Sans SC alias, the
+    /// FontVersion bumps, and the waiting-node map clears.
+    #[test]
+    fn slice_arrival_registers_font_and_bumps_version() {
+        let provider = Arc::new(MockFontProvider::new(false));
+        let mut doc = make_doc_with_text("中", provider.clone());
+        doc.resolve(0.0);
+        assert_eq!(provider.fetched.lock().unwrap().len(), 1);
+
+        // Complete the fetch with the bundled bullet font bytes (a valid OTF);
+        // pass-through decompress + alias registration under "Noto Sans SC".
+        let (url, handler) = provider.handlers.lock().unwrap().remove(0);
+        handler.bytes(url, blitz_traits::net::Bytes::from(crate::BULLET_FONT.to_vec()));
+
+        doc.handle_messages();
+        assert_eq!(doc.font_version, 1);
+        assert!(doc.missing_font_coverage.is_empty());
+
+        // A further resolve no longer schedules anything (slice loaded).
+        doc.resolve(0.0);
+        assert_eq!(provider.fetched.lock().unwrap().len(), 1);
     }
 }

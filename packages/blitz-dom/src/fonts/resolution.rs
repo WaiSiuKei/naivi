@@ -59,16 +59,62 @@ impl FontResolutionPolicy {
         Self::default()
     }
 
+    /// The default Noto policy for the Google Fonts wasm pipeline (R6).
+    ///
+    /// Scripts map to the Noto family that covers them; the fallback list
+    /// keeps Latin text working when no CSS family applies.
+    pub fn noto_default() -> Self {
+        let mut by_script = HashMap::new();
+        by_script.insert(TextScript::Latin, vec![FontDescriptor::new("Noto Sans")]);
+        by_script.insert(TextScript::Cjk, vec![FontDescriptor::new("Noto Sans SC")]);
+        by_script.insert(
+            TextScript::Emoji,
+            vec![FontDescriptor::new("Noto Color Emoji")],
+        );
+        by_script.insert(
+            TextScript::Hebrew,
+            vec![FontDescriptor::new("Noto Sans Hebrew")],
+        );
+        by_script.insert(
+            TextScript::Arabic,
+            vec![FontDescriptor::new("Noto Sans Arabic")],
+        );
+        Self {
+            primary: Vec::new(),
+            by_script,
+            fallback: vec![FontDescriptor::new("Noto Sans")],
+            generation: 0,
+        }
+    }
+
+    /// Noto family names for every script present in `text`, in policy order,
+    /// deduplicated. Used by the document pre-scan to add per-script fallback
+    /// candidates when the CSS font-family has no coverage (R6).
+    pub fn families_for_text(&self, text: &str) -> Vec<String> {
+        let mut result: Vec<String> = Vec::new();
+        for unit in resolution_units(text) {
+            for font in self.candidates_for(unit.script) {
+                if !result.contains(&font.family) {
+                    result.push(font.family);
+                }
+            }
+        }
+        result
+    }
+
+    #[cfg(test)]
     pub fn with_primary(mut self, fonts: Vec<FontDescriptor>) -> Self {
         self.primary = fonts;
         self
     }
 
+    #[cfg(test)]
     pub fn with_script_fonts(mut self, script: TextScript, fonts: Vec<FontDescriptor>) -> Self {
         self.by_script.insert(script, fonts);
         self
     }
 
+    #[cfg(test)]
     pub fn with_fallback(mut self, fonts: Vec<FontDescriptor>) -> Self {
         self.fallback = fonts;
         self
@@ -226,6 +272,39 @@ mod tests {
         let units = resolution_units("a.");
         assert_eq!(units[0].script, TextScript::Latin);
         assert_eq!(units[1].script, TextScript::Latin);
+    }
+
+    #[test]
+    fn script_families_maps_each_script_to_noto() {
+        let policy = FontResolutionPolicy::noto_default();
+        // Each script maps to its Noto family; the fallback (Noto Sans) is
+        // appended after the by_script candidate.
+        assert_eq!(policy.families_for_text("a"), vec!["Noto Sans".to_string()]);
+        assert_eq!(
+            policy.families_for_text("中"),
+            vec!["Noto Sans SC".to_string(), "Noto Sans".to_string()]
+        );
+        assert_eq!(
+            policy.families_for_text("😀"),
+            vec!["Noto Color Emoji".to_string(), "Noto Sans".to_string()]
+        );
+        assert_eq!(
+            policy.families_for_text("שלום"),
+            vec!["Noto Sans Hebrew".to_string(), "Noto Sans".to_string()]
+        );
+        assert_eq!(
+            policy.families_for_text("مرحبا"),
+            vec!["Noto Sans Arabic".to_string(), "Noto Sans".to_string()]
+        );
+        // Mixed text yields each family once, in first-appearance order.
+        assert_eq!(
+            policy.families_for_text("a中😀"),
+            vec![
+                "Noto Sans".to_string(),
+                "Noto Sans SC".to_string(),
+                "Noto Color Emoji".to_string()
+            ]
+        );
     }
 
     #[test]

@@ -287,6 +287,29 @@ struct FontFaceHandler {
     format: FontFaceSourceFormatKeyword,
     overrides: FontFaceOverrides,
 }
+
+/// Decompress WOFF / WOFF2 bytes to a raw font, sniffing magic bytes when no
+/// format hint is available. Raw TTF / OTF (or unsupported) bytes pass through
+/// unchanged. Returns `None` only when a known-compressed font fails to
+/// decompress. Shared by the `@font-face` path and the Google Fonts slice
+/// loader.
+pub(crate) fn decompress_font_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() >= 4 {
+        match &bytes[0..4] {
+            // WOFF (v1) files begin with 0x774F4646 ('wOFF' in ascii)
+            // See: <https://w3c.github.io/woff/woff1/spec/Overview.html#WOFFHeader>
+            #[cfg(feature = "woff")]
+            b"wOFF" => return wuff::decompress_woff1(bytes).ok(),
+            // WOFF2 files begin with 0x774F4632 ('wOF2' in ascii)
+            // See: <https://w3c.github.io/woff/woff2/#woff20Header>
+            #[cfg(feature = "woff")]
+            b"wOF2" => return wuff::decompress_woff2(bytes).ok(),
+            _ => {}
+        }
+    }
+    // Raw TTF / OTF (or unsupported) passes through unchanged.
+    Some(bytes.to_vec())
+}
 impl NetHandler for ResourceHandler<FontFaceHandler> {
     fn bytes(mut self: Box<Self>, resolved_url: String, bytes: Bytes) {
         let result = self.data.parse(bytes);
@@ -294,8 +317,7 @@ impl NetHandler for ResourceHandler<FontFaceHandler> {
     }
 }
 impl FontFaceHandler {
-    fn parse(&mut self, bytes: Bytes) -> Result<Resource, String> {
-        if self.format == FontFaceSourceFormatKeyword::None && bytes.len() >= 4 {
+    fn parse(&mut self, bytes: Bytes) -> Result<Resource, String> {        if self.format == FontFaceSourceFormatKeyword::None && bytes.len() >= 4 {
             self.format = match &bytes.as_ref()[0..4] {
                 // WOFF (v1) files begin with 0x774F4646 ('wOFF' in ascii)
                 // See: <https://w3c.github.io/woff/woff1/spec/Overview.html#WOFFHeader>

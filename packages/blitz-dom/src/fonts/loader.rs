@@ -50,8 +50,11 @@ impl FontLoader {
     ///
     /// Keeps the coverage index in sync with the current slice set (insert is
     /// incremental and idempotent per `(range, index)`), walks the text's
-    /// resolution units, and returns the URLs of slices that must be fetched
-    /// now. URLs already loading / loaded / failed are skipped (dedup).
+    /// resolution units, and returns the URLs of slices this text still needs:
+    /// newly begun (`NotStarted` → `Loading`) plus ones already in flight
+    /// (`Loading`). Loaded / failed URLs are never returned (dedup). The
+    /// caller dedupes fetches via its pending map and records the waiting
+    /// nodes for targeted invalidation.
     pub fn scan_text(
         &mut self,
         text: &str,
@@ -73,7 +76,7 @@ impl FontLoader {
         }
 
         let font = FontDescriptor::new(family).with_style(style).with_weight(weight);
-        let mut to_fetch = Vec::new();
+        let mut needed = Vec::new();
         for unit in resolution_units(text) {
             let request = FontSliceRequest {
                 font: font.clone(),
@@ -86,11 +89,21 @@ impl FontLoader {
             else {
                 continue;
             };
-            if self.state.begin(&slice.url) {
-                to_fetch.push(slice.url.clone());
+            match self.state.status(&slice.url) {
+                FontSliceStatus::Loaded | FontSliceStatus::Failed => continue,
+                FontSliceStatus::Loading => {
+                    if !needed.contains(&slice.url) {
+                        needed.push(slice.url.clone());
+                    }
+                }
+                FontSliceStatus::NotStarted => {
+                    if self.state.begin(&slice.url) && !needed.contains(&slice.url) {
+                        needed.push(slice.url.clone());
+                    }
+                }
             }
         }
-        to_fetch
+        needed
     }
 
     /// Record a successful fetch for `url`. Returns the pending font data
@@ -163,13 +176,19 @@ mod tests {
     }
 
     #[test]
-    fn scan_dedupes_by_url() {
+    fn scan_reports_loading_urls_and_dedupes_fetch() {
         let mut loader = loader_with_slices();
-        // Same CJK text scanned twice: second scan returns nothing new.
+        // Same CJK text scanned twice: first scan begins the URL and returns
+        // it; while still loading a re-scan re-reports it (the caller dedupes
+        // fetches via its pending map).
         let urls = loader.scan_text("中中", "Noto Sans SC", FontStyle::Normal, FontWeight::Normal);
         assert_eq!(urls.len(), 1);
         let again = loader.scan_text("中", "Noto Sans SC", FontStyle::Normal, FontWeight::Normal);
-        assert!(again.is_empty());
+        assert_eq!(again, urls);
+        // Once loaded, no longer reported.
+        loader.complete(&urls[0], vec![1, 2, 3]);
+        let done = loader.scan_text("中", "Noto Sans SC", FontStyle::Normal, FontWeight::Normal);
+        assert!(done.is_empty());
     }
 
     #[test]

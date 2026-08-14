@@ -432,6 +432,50 @@ impl BaseDocument {
         }
     }
 
+    /// Targeted variant of [`Self::invalidate_inline_contexts`]: only the
+    /// given nodes' inline contexts are re-damaged, so a newly registered font
+    /// slice re-lays-out just the text that was waiting on it (R8 / AE6).
+    pub(crate) fn invalidate_text_nodes(&mut self, node_ids: Vec<NodeId>) {
+        let scale = self.viewport.scale();
+
+        let font_ctx = &self.font_ctx;
+        let layout_ctx = &mut self.layout_ctx;
+
+        let mut anon_nodes = Vec::new();
+
+        for node_id in node_ids {
+            let Some(node) = self.nodes.get_mut(node_id) else {
+                continue;
+            };
+            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
+                continue;
+            }
+
+            let Some(element) = node.data.downcast_element_mut() else {
+                continue;
+            };
+
+            if element.inline_layout_data.is_some() {
+                if node.is_anonymous() {
+                    anon_nodes.push(node.id);
+                } else {
+                    node.insert_damage(ALL_DAMAGE);
+                }
+            } else if let Some(input) = element.text_input_data_mut() {
+                input.editor.set_scale(scale);
+                let mut font_ctx = font_ctx.lock().unwrap();
+                input.editor.refresh_layout(&mut font_ctx, layout_ctx);
+                node.insert_damage(ONLY_RELAYOUT);
+            }
+        }
+
+        for node_id in anon_nodes {
+            if let Some(parent_id) = *(self.nodes[node_id].layout_parent.get_mut()) {
+                self.nodes[parent_id].insert_damage(ALL_DAMAGE);
+            }
+        }
+    }
+
     pub fn flush_styles_to_layout(&mut self, node_id: NodeId) {
         self.flush_styles_to_layout_impl(node_id, None);
     }

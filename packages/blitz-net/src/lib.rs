@@ -265,7 +265,6 @@ impl NetProvider for Provider {
 
         let waker = self.waker.clone();
         spawn(async move {
-            #[cfg(feature = "tracing")]
             let url = request.url.to_string();
 
             let signal = request.signal.take();
@@ -294,6 +293,10 @@ impl NetProvider for Provider {
                     tracing::error!(url = url.as_str(), error = ?e, "Error fetching");
                     #[cfg(not(feature = "tracing"))]
                     let _ = e;
+                    // Surface the failure to the handler (e.g. the font-slice
+                    // loader marks the URL failed instead of hanging forever
+                    // in `loading`).
+                    handler.error(url);
                 }
             };
         });

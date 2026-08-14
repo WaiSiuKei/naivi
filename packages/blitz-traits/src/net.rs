@@ -33,6 +33,13 @@ pub trait NetProvider: Send + Sync + 'static {
 /// the NetCallack with the result.
 pub trait NetHandler: Send + Sync + 'static {
     fn bytes(self: Box<Self>, resolved_url: String, bytes: Bytes);
+
+    /// Called when the request fails (network error, non-2xx status, abort).
+    ///
+    /// Default no-op for backward compatibility with existing handlers; the
+    /// on-demand font-slice loader uses it to mark a slice as failed so it is
+    /// never retried within the session (R4 / AE5).
+    fn error(self: Box<Self>, _resolved_url: String) {}
 }
 
 /// A callback which gets called every time a network request completes
