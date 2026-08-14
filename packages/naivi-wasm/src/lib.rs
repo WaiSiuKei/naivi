@@ -29,16 +29,20 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod net;
+
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyrender_vello_hybrid::VelloHybridWindowRenderer;
+use blitz_dom::fonts::slice::parse_font_css;
 use blitz_dom::{BaseDocument, DocGuard, DocGuardMut, Document, DocumentConfig, build_single_font_ctx};
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig};
 use blitz_traits::events::UiEvent;
 use naivi_dom::{EventSink, NaiviDocument, NaiviEvent};
 use std::task::Context as TaskContext;
-use tracing::info;
+use tracing::{info, warn};
 use wasm_bindgen::prelude::*;
 use winit::event_loop::EventLoop;
 use winit::platform::web::WindowAttributesWeb;
@@ -48,6 +52,40 @@ use winit::window::WindowAttributes;
 /// don't expose system fonts to wasm). License: Bitstream Vera / DejaVu
 /// (permissive).
 const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.woff2");
+
+/// Google Fonts CSS endpoints for the families the resolution policy maps
+/// scripts to (Latin / CJK / Emoji in the default sheet; Hebrew / Arabic in
+/// the RTL sheet). Only the (small) stylesheets are fetched at startup — the
+/// WOFF2 slices they reference stay on-demand, driven by the document's
+/// pre-scan as text is shaped (U8 bootstrap).
+const DEFAULT_FONT_CSS_URL: &str = "https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700&family=Noto+Sans+SC:wght@400;700&family=Noto+Color+Emoji&display=swap";
+const RTL_FONT_CSS_URL: &str = "https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@400;700&family=Noto+Sans+Arabic:wght@400;700&display=swap";
+
+/// Fetch both Google Fonts stylesheets, parse the `@font-face` slices out of
+/// them, and register them on the document (U8). The document's pre-scan then
+/// fetches individual WOFF2 slices on demand during resolve; no explicit
+/// re-layout trigger is needed because `resolve` runs every frame.
+fn bootstrap_fonts(doc: Rc<RefCell<NaiviDocument>>) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut all_slices = Vec::new();
+        for url in [DEFAULT_FONT_CSS_URL, RTL_FONT_CSS_URL] {
+            match net::fetch_text(url).await {
+                Ok(css) => {
+                    let slices = parse_font_css(&css);
+                    info!("bootstrap: {url} -> {} slices", slices.len());
+                    all_slices.extend(slices);
+                }
+                Err(e) => warn!("bootstrap: failed to fetch {url}: {e:?}"),
+            }
+        }
+        if all_slices.is_empty() {
+            return;
+        }
+        if let Ok(doc) = doc.try_borrow_mut() {
+            doc.inner.borrow_mut().set_google_font_slices(all_slices);
+        }
+    });
+}
 
 thread_local! {
     /// The single naivi document, installed by [`start`] before `run_app`.
@@ -226,6 +264,9 @@ pub fn start() -> Result<(), JsValue> {
     let renderer = VelloHybridWindowRenderer::new();
     let mut doc = NaiviDocument::with_config(DocumentConfig {
         font_ctx: Some(build_single_font_ctx(DEJAVU_SANS)),
+        // Real network on wasm (U6): window.fetch drives resource + font-slice
+        // loads; failures route through `NetHandler::error`.
+        net_provider: Some(Arc::new(net::WasmNetProvider)),
         ..Default::default()
     });
     doc.set_event_sink(Box::new(WasmEventSink));
@@ -234,6 +275,9 @@ pub fn start() -> Result<(), JsValue> {
     // Install the document in global state BEFORE run_app so any guest op
     // issued after the first frame resolves against it.
     DOC.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&doc)));
+
+    // Kick off the Google Fonts bootstrap (U8).
+    bootstrap_fonts(Rc::clone(&doc));
 
     // Intentionally no `.with_surface_size(...)` on wasm: letting winit-web set
     // the canvas size writes fixed inline CSS that overrides host stylesheet

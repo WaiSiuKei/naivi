@@ -44,7 +44,7 @@ mod debug;
 mod events;
 mod font_metrics;
 /// On-demand font slice loading for the wasm target (naive port).
-mod fonts;
+pub mod fonts;
 mod form;
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
