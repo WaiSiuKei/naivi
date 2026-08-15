@@ -6,11 +6,37 @@
 //! `NetHandler` contract. Failures surface via `handler.error` so the
 //! font-slice loader marks a slice failed instead of hanging in `loading`.
 
-use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request};
+use blitz_shell::BlitzShellProxy;
+use blitz_traits::net::{Bytes, NetHandler, NetProvider, NetWaker, Request};
 use js_sys::{JsString, Uint8Array};
+use std::cell::RefCell;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request as WebRequest, RequestInit, RequestMode, Response};
+
+// The host's event-loop proxy, installed by [`crate::start`] once the shell
+// is created. A fetch that completes while the event loop is idle (no input
+// events) must wake it, or the queued `FontSliceLoaded` / resource events
+// are never drained and the newly loaded font never re-shapes/paints until
+// the user moves the mouse.
+thread_local! {
+    static SHELL_PROXY: RefCell<Option<BlitzShellProxy>> = const { RefCell::new(None) };
+}
+
+/// Install the shell proxy so font-slice / CSS / resource fetch completions
+/// can wake the winit event loop (`RequestRedraw`, see [`NetWaker`]).
+pub(crate) fn set_redraw_waker(proxy: BlitzShellProxy) {
+    SHELL_PROXY.with(|slot| *slot.borrow_mut() = Some(proxy));
+}
+
+/// Wake the host event loop for `doc_id` so a pending completion is processed.
+fn wake_host(doc_id: usize) {
+    SHELL_PROXY.with(|slot| {
+        if let Some(proxy) = slot.borrow().as_ref() {
+            proxy.wake(doc_id);
+        }
+    });
+}
 
 /// Fetch timeout for font slices and the CSS bootstrap. A fetch that never
 /// settles would otherwise leave a slice `Loading` forever (and keep the
@@ -45,7 +71,7 @@ fn fetch_timeout(ms: u32) -> impl futures::Future<Output = ()> {
 pub struct WasmNetProvider;
 
 impl NetProvider for WasmNetProvider {
-    fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
+    fn fetch(&self, doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
         let url = request.url.to_string();
         let method = request.method.as_str().to_string();
 
@@ -66,6 +92,7 @@ impl NetProvider for WasmNetProvider {
             Ok(req) => req,
             Err(_) => {
                 handler.error(url.clone());
+                wake_host(doc_id);
                 return;
             }
         };
@@ -73,6 +100,7 @@ impl NetProvider for WasmNetProvider {
             Some(window) => window,
             None => {
                 handler.error(url);
+                wake_host(doc_id);
                 return;
             }
         };
@@ -107,6 +135,9 @@ impl NetProvider for WasmNetProvider {
                 Ok(Uint8Array::new(&array_buffer).to_vec())
             };
 
+            // Deliver the result and wake the host so the queued completion
+            // event is drained and processed even while the event loop is
+            // idle (no input events).
             match futures::future::select(
                 Box::pin(fetch_work),
                 Box::pin(fetch_timeout(FETCH_TIMEOUT_MS)),
@@ -127,6 +158,7 @@ impl NetProvider for WasmNetProvider {
                     handler.error(url);
                 }
             }
+            wake_host(doc_id);
         });
     }
 

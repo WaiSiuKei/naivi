@@ -32,6 +32,7 @@
 mod net;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -61,36 +62,26 @@ const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.woff2");
 const DEFAULT_FONT_CSS_URL: &str = "https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700&family=Noto+Sans+SC:wght@400;700&family=Noto+Color+Emoji&display=swap";
 const RTL_FONT_CSS_URL: &str = "https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@400;700&family=Noto+Sans+Arabic:wght@400;700&display=swap";
 
-/// Fetch both Google Fonts stylesheets (concurrently), parse the `@font-face`
-/// slices out of them, and register them on the document (U8). The document's
-/// pre-scan then fetches individual WOFF2 slices on demand during resolve; no
-/// explicit re-layout trigger is needed because `resolve` runs every frame.
+/// Fetch the default Google Fonts stylesheet (concurrently with nothing else —
+/// the RTL sheets are bootstrapped lazily by the document's pre-scan the first
+/// time Hebrew/Arabic text appears, AE4), parse the `@font-face` slices out of
+/// it, and register them on the document (U8). The document's pre-scan then
+/// fetches individual WOFF2 slices on demand during resolve; no explicit
+/// re-layout trigger is needed because `resolve` runs every frame.
 fn bootstrap_fonts(doc: Rc<RefCell<NaiviDocument>>) {
     wasm_bindgen_futures::spawn_local(async move {
-        // The two stylesheets are independent network requests; await them in
-        // parallel so bootstrap latency is not doubled.
-        let (default, rtl) = futures::future::join(
-            net::fetch_text(DEFAULT_FONT_CSS_URL),
-            net::fetch_text(RTL_FONT_CSS_URL),
-        )
-        .await;
-
-        let mut all_slices = Vec::new();
-        for (url, css) in [(DEFAULT_FONT_CSS_URL, default), (RTL_FONT_CSS_URL, rtl)] {
-            match css {
-                Ok(css) => {
-                    let slices = parse_font_css(&css);
-                    info!("bootstrap: {url} -> {} slices", slices.len());
-                    all_slices.extend(slices);
+        match net::fetch_text(DEFAULT_FONT_CSS_URL).await {
+            Ok(css) => {
+                let slices = parse_font_css(&css);
+                info!("bootstrap: {DEFAULT_FONT_CSS_URL} -> {} slices", slices.len());
+                if slices.is_empty() {
+                    return;
                 }
-                Err(e) => warn!("bootstrap: failed to fetch {url}: {e:?}"),
+                if let Ok(doc) = doc.try_borrow_mut() {
+                    doc.inner.borrow_mut().set_google_font_slices(slices);
+                }
             }
-        }
-        if all_slices.is_empty() {
-            return;
-        }
-        if let Ok(doc) = doc.try_borrow_mut() {
-            doc.inner.borrow_mut().set_google_font_slices(all_slices);
+            Err(e) => warn!("bootstrap: failed to fetch {DEFAULT_FONT_CSS_URL}: {e:?}"),
         }
     });
 }
@@ -268,6 +259,10 @@ pub fn start() -> Result<(), JsValue> {
 
     let event_loop = EventLoop::new().map_err(|e| JsValue::from_str(&format!("{e}")))?;
     let (proxy, rx) = BlitzShellProxy::new(event_loop.create_proxy());
+    // Fetch completions (font slices / CSS / resources) wake the event loop
+    // via `RequestRedraw`, so a completion landing while the loop is idle is
+    // processed without waiting for the next input event.
+    net::set_redraw_waker(proxy.clone());
 
     let renderer = VelloHybridWindowRenderer::new();
     let mut doc = NaiviDocument::with_config(DocumentConfig {
@@ -278,6 +273,12 @@ pub fn start() -> Result<(), JsValue> {
         ..Default::default()
     });
     doc.set_event_sink(Box::new(WasmEventSink));
+    // Lazy RTL bootstrap (AE4): the pre-scan fetches these sheets only when
+    // Hebrew/Arabic text actually needs them, instead of at startup.
+    doc.inner.borrow_mut().set_google_font_css_urls(HashMap::from([
+        ("Noto Sans Hebrew".to_string(), RTL_FONT_CSS_URL.to_string()),
+        ("Noto Sans Arabic".to_string(), RTL_FONT_CSS_URL.to_string()),
+    ]));
     let doc = Rc::new(RefCell::new(doc));
 
     // Install the document in global state BEFORE run_app so any guest op

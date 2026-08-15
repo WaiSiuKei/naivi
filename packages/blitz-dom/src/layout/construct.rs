@@ -1153,6 +1153,19 @@ pub(crate) fn find_inline_layout_embedded_boxes(
     }
 }
 
+/// The Google Fonts families the wasm pipeline loads for the generic default
+/// (Latin / CJK / Emoji eagerly, RTL lazily). When a computed `font-family`
+/// is generic-only, shaping expands it to this set so the loaded slices are
+/// used instead of the bundled DejaVu fallback (see
+/// [`build_inline_layout_into`]).
+const NOTO_FAMILY_SET: &[&str] = &[
+    "Noto Sans",
+    "Noto Sans SC",
+    "Noto Color Emoji",
+    "Noto Sans Hebrew",
+    "Noto Sans Arabic",
+];
+
 pub(crate) fn build_inline_layout_into(
     nodes: &crate::NodeTree,
     layout_ctx: &mut LayoutContext<TextBrush>,
@@ -1160,6 +1173,7 @@ pub(crate) fn build_inline_layout_into(
     text_layout: &mut TextLayout,
     scale: f32,
     inline_context_root_node_id: NodeId,
+    map_generics_to_noto: bool,
 ) {
     // Get the inline context's root node's text styles
     let root_node = &nodes[inline_context_root_node_id];
@@ -1169,10 +1183,47 @@ pub(crate) fn build_inline_layout_into(
             .and_then(|parent_id| nodes[parent_id].primary_styles())
     });
 
-    let parley_style = root_node_style
+    let mut parley_style = root_node_style
         .as_ref()
         .map(|s| stylo_to_parley::style(inline_context_root_node_id, s))
         .unwrap_or_default();
+
+    // With the wasm font pipeline active (Google slices installed), generic
+    // families must resolve to the Noto set rather than the bundled DejaVu
+    // fallback: `build_single_font_ctx` registers DejaVu under every generic,
+    // so a generic-only computed family (e.g. Tailwind v4's var()-based
+    // preflight that stylo cannot resolve, leaving the initial `serif`)
+    // would keep shaping with DejaVu even after the Noto slices load. Expand
+    // each generic to the Noto families so the loaded slices win (R6); a
+    // glyph still missing from every Noto family falls through to DejaVu via
+    // the script fallback.
+    if map_generics_to_noto {
+        use parley::FontFamilyName;
+        fn expand(name: &FontFamilyName<'_>) -> Vec<FontFamilyName<'static>> {
+            match name {
+                FontFamilyName::Generic(_) => NOTO_FAMILY_SET
+                    .iter()
+                    .map(|f| FontFamilyName::Named(std::borrow::Cow::Owned(f.to_string())))
+                    .collect(),
+                FontFamilyName::Named(n) => {
+                    vec![FontFamilyName::Named(std::borrow::Cow::Owned(n.to_string()))]
+                }
+            }
+        }
+        match parley_style.font_family.clone() {
+            parley::FontFamily::Single(name) => {
+                parley_style.font_family =
+                    parley::FontFamily::List(std::borrow::Cow::Owned(expand(&name)));
+            }
+            parley::FontFamily::List(list) => {
+                parley_style.font_family = parley::FontFamily::List(std::borrow::Cow::Owned(
+                    list.iter().flat_map(|n| expand(n)).collect(),
+                ));
+            }
+            // A raw font source (not a family list) stays untouched.
+            parley::FontFamily::Source(_) => {}
+        }
+    }
 
     let root_line_height = resolve_line_height(parley_style.line_height, parley_style.font_size);
 

@@ -52,6 +52,65 @@ pub struct FontSliceRequest<'a> {
     pub text: &'a str,
 }
 
+/// Available weights for a request, ordered by CSS font-weight matching
+/// preference (CSS Fonts §5.2): the exact weight first, then the fallback
+/// order for weights below / at / above 500. Only weights actually present in
+/// `available` are returned.
+///
+/// Google Fonts typically ships a sparse weight set (e.g. 400 + 700 only), so
+/// `font-light` (300) or `font-[200]` text must still resolve — to the 400
+/// slice — instead of scheduling nothing and rendering with the fallback
+/// font forever.
+pub fn weight_fallbacks(desired: FontWeight, available: &[FontWeight]) -> Vec<FontWeight> {
+    let mut set: Vec<i32> = available.iter().map(|w| *w as i32).collect();
+    set.sort_unstable();
+    set.dedup();
+    let d = desired as i32;
+    if set.contains(&d) {
+        return vec![desired];
+    }
+    let mut ordered: Vec<FontWeight> = Vec::new();
+    let mut push = |w: i32| {
+        if let Some(fw) = FontWeight::from_u16(w as u16) {
+            if set.contains(&w) && !ordered.contains(&fw) {
+                ordered.push(fw);
+            }
+        }
+    };
+    if d < 400 {
+        // Below 400: weights ≤ desired descending, then weights > desired
+        // ascending (300 → 300, 200, 100, 400, 500, …).
+        for w in (100..=d).rev() {
+            push(w);
+        }
+        for w in (d + 1)..=900 {
+            push(w);
+        }
+    } else if d <= 500 {
+        // [400, 500]: weights ≥ desired ascending up to 500, then weights
+        // < desired descending (400 → 400, 500, 300, 200, 100, 600, …).
+        for w in d..=500 {
+            push(w);
+        }
+        for w in (100..d).rev() {
+            push(w);
+        }
+        for w in 501..=900 {
+            push(w);
+        }
+    } else {
+        // Above 500: weights ≥ desired ascending, then weights < desired
+        // descending (600 → 600, 700, 800, 900, 500, 400, …).
+        for w in d..=900 {
+            push(w);
+        }
+        for w in (100..d).rev() {
+            push(w);
+        }
+    }
+    ordered
+}
+
 /// Whether `slice` matches the request metadata and completely covers `unit`.
 ///
 /// Default-ignorable code points are exempt from the coverage requirement
@@ -200,8 +259,44 @@ mod tests {
     }
 
     #[test]
-    fn zwj_sequence_uses_visible_codepoints() {
-        // Family emoji "👨👩👧👦" = man ZWJ woman ZWJ girl ZWJ boy. With
+    fn weight_fallbacks_order_css_matching() {
+        use FontWeight as W;
+        let available = [W::Normal, W::Bold]; // e.g. Google ships 400+700 only
+        // Exact weight first (only the exact match).
+        assert_eq!(weight_fallbacks(W::Normal, &available), vec![W::Normal]);
+        assert_eq!(weight_fallbacks(W::Bold, &available), vec![W::Bold]);
+        // font-light (300): descend 300→100 (none), then ascend → 400, 700.
+        assert_eq!(weight_fallbacks(W::Light, &available), vec![W::Normal, W::Bold]);
+        // font-[200]: same order.
+        assert_eq!(
+            weight_fallbacks(W::ExtraLight, &available),
+            vec![W::Normal, W::Bold]
+        );
+        // 500 in [400,500]: 500 none → 400, then 700.
+        assert_eq!(weight_fallbacks(W::Medium, &available), vec![W::Normal, W::Bold]);
+        // 600 above 500: 600..900 → 700, then below → 400.
+        assert_eq!(weight_fallbacks(W::SemiBold, &available), vec![W::Bold, W::Normal]);
+        // 800: 800,900 none → 700, then below → 400.
+        assert_eq!(
+            weight_fallbacks(W::ExtraBold, &available),
+            vec![W::Bold, W::Normal]
+        );
+
+        // With a denser set, the exact weight still wins and neighbours are
+        // ordered per the CSS rules.
+        let dense = [W::Light, W::Normal, W::Medium, W::Bold];
+        assert_eq!(
+            weight_fallbacks(W::ExtraLight, &dense),
+            vec![W::Light, W::Normal, W::Medium, W::Bold]
+        );
+        assert_eq!(
+            weight_fallbacks(W::SemiBold, &dense),
+            vec![W::Bold, W::Medium, W::Normal, W::Light]
+        );
+    }
+
+    #[test]
+    fn zwj_sequence_uses_visible_codepoints() {        // Family emoji "👨👩👧👦" = man ZWJ woman ZWJ girl ZWJ boy. With
         // default-ignorable exemption, a slice covering U+1F468..U+1F466 etc.
         // matches even though ZWJ (U+200D) is absent from the ranges.
         let css = r#"

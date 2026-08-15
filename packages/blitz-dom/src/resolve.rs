@@ -358,6 +358,11 @@ impl BaseDocument {
                     let font_ctx_mut = &mut *self.font_ctx.lock().unwrap();
 
                     layout.content_widths = None;
+                    // With Google slices installed (wasm), generic
+                    // font-family entries are expanded to the Noto set at
+                    // shaping time so loaded slices render instead of the
+                    // bundled DejaVu fallback (R6).
+                    let map_generics_to_noto = !self.font_loader.slices().is_empty();
                     build_inline_layout_into(
                         &self.nodes,
                         layout_ctx_mut,
@@ -365,6 +370,7 @@ impl BaseDocument {
                         &mut layout,
                         self.viewport.scale(),
                         task.node_id,
+                        map_generics_to_noto,
                     );
 
                     #[cfg(feature = "parallel-construct")]

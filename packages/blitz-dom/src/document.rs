@@ -189,6 +189,17 @@ pub enum DocumentEvent {
     FontSliceFailed {
         url: String,
     },
+    /// A lazily bootstrapped Google Fonts CSS sheet finished downloading
+    /// (e.g. the RTL sheet, fetched only when Hebrew/Arabic text appears).
+    FontCssLoaded {
+        family: String,
+        css: String,
+    },
+    /// A lazy Google Fonts CSS bootstrap fetch failed; the family is not
+    /// retried this session.
+    FontCssFailed {
+        family: String,
+    },
     /// A navigation originating from within an iframe's sub-document
     /// (e.g. a link click), to be applied to the iframe identified by `node_id`.
     NavigateIframe {
@@ -276,6 +287,15 @@ pub struct BaseDocument {
     /// Slice arrivals drained from the event channel in this frame, registered
     /// and invalidated together (frame-level coalescing).
     pending_font_arrivals: Vec<(String, Bytes)>,
+    /// Family → Google Fonts CSS URL for lazy bootstrap (the wasm host
+    /// configures the RTL sheets here). Consulted by the pre-scan only when a
+    /// candidate family has no slice definitions installed yet; empty on
+    /// native, so the RTL path is inert there (AE4).
+    pub(crate) font_css_urls: HashMap<String, String>,
+    /// Families whose CSS bootstrap has been requested this session. Dedupes
+    /// concurrent requests and never retries after a failure (mirrors slice
+    /// AE5 semantics).
+    requested_font_css: HashSet<String>,
 
     /// The real (non-anonymous) node which is currently hovered (if any).
     /// This is never a layout-generated (anonymous) node, so it remains valid
@@ -510,6 +530,8 @@ impl BaseDocument {
             font_scan_needed: false,
             missing_font_coverage: HashMap::new(),
             pending_font_arrivals: Vec::new(),
+            font_css_urls: HashMap::new(),
+            requested_font_css: HashSet::new(),
 
             hover_node_id: None,
             hover_hit_node_id: None,
@@ -1268,6 +1290,19 @@ impl BaseDocument {
                 // node references for the document's lifetime.
                 self.missing_font_coverage.remove(&url);
             }
+            DocumentEvent::FontCssLoaded { css, .. } => {
+                // Parse the lazily bootstrapped sheet (e.g. RTL) and append
+                // its slice definitions; the next pre-scan then schedules
+                // the WOFF2 slices the text actually needs.
+                let slices = crate::fonts::slice::parse_font_css(&css);
+                if !slices.is_empty() {
+                    self.append_google_font_slices(slices);
+                }
+            }
+            DocumentEvent::FontCssFailed { .. } => {
+                // The family stays in `requested_font_css`: a failed
+                // bootstrap is never retried this session (AE5).
+            }
             DocumentEvent::NavigateIframe { node_id, url } => self.navigate_iframe(node_id, url),
         }
     }
@@ -1275,11 +1310,51 @@ impl BaseDocument {
     /// Install parsed Google Fonts slices (from a fetched Google Fonts CSS)
     /// into the document's loader. With no slices installed the pre-scan and
     /// fetch paths are inert, so native documents are unaffected.
+    ///
+    /// Requests a redraw so the next resolve re-runs the pre-scan: the
+    /// bootstrap completes asynchronously (often after the last event-driven
+    /// resolve), and without a redraw a `ControlFlow::Wait` event loop would
+    /// idle until the next input event — no slices would ever be scheduled
+    /// until the user moves the mouse.
     pub fn set_google_font_slices(&mut self, slices: Vec<crate::fonts::FontSlice>) {
         self.font_loader.set_slices(slices);
         // New slices may newly cover text the last scan could not schedule;
         // force one more pre-scan pass.
         self.font_scan_needed = true;
+        self.shell_provider.request_redraw();
+    }
+
+    /// Configure family → Google Fonts CSS URL for lazy bootstrap (RTL, AE4).
+    /// The pre-scan fetches a family's sheet the first time it finds text
+    /// needing that family while no slice definitions for it are installed.
+    pub fn set_google_font_css_urls(&mut self, urls: HashMap<String, String>) {
+        self.font_css_urls = urls;
+    }
+
+    /// Append newly bootstrapped slice definitions (e.g. a lazily fetched RTL
+    /// sheet) without replacing the existing set. Dedups by URL so a slice
+    /// definition is never registered twice.
+    pub fn append_google_font_slices(&mut self, slices: Vec<crate::fonts::FontSlice>) {
+        let existing: HashSet<&str> = self
+            .font_loader
+            .slices()
+            .iter()
+            .map(|s| s.url.as_str())
+            .collect();
+        let new: Vec<_> = slices
+            .into_iter()
+            .filter(|s| !existing.contains(s.url.as_str()))
+            .collect();
+        if new.is_empty() {
+            return;
+        }
+        self.font_loader.append_slices(new);
+        // The new definitions may cover text the last scan could not
+        // schedule; force one more pre-scan pass. Request a redraw for the
+        // same reason as `set_google_font_slices`: the RTL sheet arrives
+        // asynchronously and must not wait for the next input event.
+        self.font_scan_needed = true;
+        self.shell_provider.request_redraw();
     }
 
     /// Pre-scan text nodes for missing Google Fonts coverage and schedule
@@ -1304,6 +1379,8 @@ impl BaseDocument {
             )
         });
         if !self.font_scan_needed && !any_loading && self.missing_font_coverage.is_empty() {
+            // Steady state: nothing to do. Not logged to avoid flooding the
+            // console every frame (the diagnostic value is in the passes).
             return;
         }
         self.font_scan_needed = false;
@@ -1400,6 +1477,11 @@ impl BaseDocument {
             }
 
             for family in candidates {
+                // Lazy CSS bootstrap (AE4 / RTL): when a candidate Noto
+                // family has no slice definitions installed yet, request its
+                // Google Fonts CSS once so a later scan can schedule the
+                // WOFF2 slices the text actually needs.
+                self.request_font_css_if_needed(&family);
                 for url in self
                     .font_loader
                     .scan_text_units(&text, &units, &family, style_kind, weight)
@@ -1424,6 +1506,37 @@ impl BaseDocument {
         for url in to_fetch {
             self.fetch_font_slice(&url);
         }
+    }
+
+    /// Lazy Google Fonts CSS bootstrap (AE4 / RTL): if `family` has no slice
+    /// definitions installed yet and the host configured a CSS URL for it
+    /// (the RTL sheets), fetch that CSS once. The fetched sheet is parsed and
+    /// appended by [`Self::handle_message`] (`FontCssLoaded`), after which a
+    /// later pre-scan schedules the family's WOFF2 slices. A family is
+    /// requested at most once per session (no retry after failure, AE5).
+    fn request_font_css_if_needed(&mut self, family: &str) {
+        if self.font_loader.slices().iter().any(|s| s.family == family) {
+            return;
+        }
+        let Some(url) = self.font_css_urls.get(family).cloned() else {
+            return;
+        };
+        if !self.requested_font_css.insert(family.to_string()) {
+            return;
+        }
+        let Ok(parsed) = url::Url::parse(&url) else {
+            return;
+        };
+        let doc_id = self.id;
+        let tx = self.tx.clone();
+        self.net_provider.fetch(
+            doc_id,
+            self.build_request(parsed),
+            Box::new(FontCssHandler {
+                tx,
+                family: family.to_string(),
+            }),
+        );
     }
 
     /// Register decoded font bytes with a family alias into the parley
@@ -3073,6 +3186,31 @@ impl blitz_traits::net::NetHandler for FontSliceHandler {
     }
 }
 
+/// Completion handler for a lazy Google Fonts CSS bootstrap fetch (RTL
+/// sheets, AE4). Routes the CSS text (or the failure) back through a
+/// `DocumentEvent` so slice parsing + installation run on the document's
+/// main thread.
+struct FontCssHandler {
+    tx: Sender<DocumentEvent>,
+    family: String,
+}
+
+impl blitz_traits::net::NetHandler for FontCssHandler {
+    fn bytes(self: Box<Self>, _resolved_url: String, bytes: Bytes) {
+        let css = String::from_utf8_lossy(bytes.as_ref()).into_owned();
+        let _ = self.tx.send(DocumentEvent::FontCssLoaded {
+            family: self.family,
+            css,
+        });
+    }
+
+    fn error(self: Box<Self>, _resolved_url: String) {
+        let _ = self.tx.send(DocumentEvent::FontCssFailed {
+            family: self.family,
+        });
+    }
+}
+
 /// Whether every visible character in `text` is covered by an installed font
 /// under the given computed font-family query (R7: author fonts / DejaVu keep
 /// their priority and no Google slice is scheduled). Default-ignorable code
@@ -3088,7 +3226,19 @@ fn installed_fonts_cover(
     let mut font_ctx = font_ctx.lock().unwrap();
     let font_ctx = &mut *font_ctx;
     let mut query = font_ctx.collection.query(&mut font_ctx.source_cache);
-    query.set_families(families.iter().map(crate::stylo_to_parley::query_font_family));
+    // Only explicitly-named families count as "an installed author font
+    // covers this text" (R7). Generic families — including system-ui aliases
+    // such as -apple-system / BlinkMacSystemFont — resolve to whatever is
+    // registered (e.g. the bundled DejaVu fallback on wasm) and must not
+    // suppress Google slice fetching: otherwise the common default CSS stack
+    // (…, "Noto Sans", …, sans-serif) never schedules the Noto slices it
+    // names, and text renders with the fallback instead of the Google font.
+    query.set_families(
+        families
+            .iter()
+            .map(crate::stylo_to_parley::query_font_family)
+            .filter(|family| !matches!(family, parley::fontique::QueryFamily::Generic(_))),
+    );
     query.set_attributes(Attributes {
         width: crate::stylo_to_parley::font_width(font.font_stretch),
         weight: crate::stylo_to_parley::font_weight(font.font_weight),
@@ -3650,6 +3800,234 @@ mod font_slice_tests {
             provider2.fetched.lock().unwrap().len(),
             1,
             "corrupt slice must not be re-fetched"
+        );
+    }
+
+    /// The common default CSS stack (Tailwind v4 preflight: several named
+    /// families — none installed — plus a trailing generic) must schedule the
+    /// Noto Sans slice it names. The installed-fonts gate (R7) may only
+    /// suppress on explicitly-named installed families; resolving the trailing
+    /// generic to the bundled DejaVu fallback and treating that as coverage
+    /// starved the Google slices, leaving text on the fallback font. Also
+    /// pins that a configured RTL sheet is NOT requested when no RTL text is
+    /// present (lazy bootstrap, AE4).
+    #[test]
+    fn generic_font_stack_does_not_suppress_noto_slices() {
+        let provider = Arc::new(MockFontProvider::new(false));
+        let font_ctx = {
+            use parley::fontique::{Collection, CollectionOptions, SourceCache};
+            let mut ctx = FontContext {
+                source_cache: SourceCache::new_shared(),
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+            };
+            // DejaVu registered under its OWN name (no "Noto Sans" override):
+            // it covers Latin, but no installed font carries any of the named
+            // families in the CSS stack below.
+            let dejavu = wuff::decompress_woff2(include_bytes!(
+                "../../blitz-paint/assets/DejaVuSans.woff2"
+            ))
+            .expect("DejaVu woff2 decompress");
+            ctx.collection.register_fonts(Blob::new(Arc::new(dejavu)), None);
+            ctx
+        };
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            net_provider: Some(provider.clone()),
+            font_ctx: Some(font_ctx),
+            ..Default::default()
+        });
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+        // RTL sheet configured but no RTL text present: it must NOT be
+        // requested (lazy bootstrap, AE4).
+        doc.set_google_font_css_urls(HashMap::from([(
+            "Noto Sans Hebrew".to_string(),
+            "https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew&display=swap".to_string(),
+        )]));
+
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let style = Attribute {
+            name: qual_name!("style"),
+            value: "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+                .to_string(),
+        };
+        let div = mutator.create_element(qual_name!("div"), vec![style]);
+        let text = mutator.create_text_node("ab");
+        mutator.append_children(div, &[text]);
+        mutator.append_children(body, &[div]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+
+        doc.resolve(0.0);
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec!["https://fonts.gstatic.com/s/notosans/v1/latin.0.woff2".to_string()],
+            "the default font stack must schedule the Noto Sans Latin slice even \
+             though DejaVu covers the text via the trailing generic; and no RTL \
+             sheet is fetched without RTL text"
+        );
+    }
+
+    /// Google Fonts ships a sparse weight set (400 + 700), but CSS often asks
+    /// for `font-light` (300) / `font-[200]`. The slice selector must fall
+    /// back to the nearest available weight (CSS font matching) so the text
+    /// still schedules the 400 slice instead of rendering with the fallback
+    /// font forever.
+    #[test]
+    fn light_weight_text_schedules_nearest_slice_weight() {
+        let provider = Arc::new(MockFontProvider::new(false));
+        let font_ctx = {
+            use parley::fontique::{Collection, CollectionOptions, SourceCache};
+            let mut ctx = FontContext {
+                source_cache: SourceCache::new_shared(),
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+            };
+            ctx.collection
+                .register_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
+            ctx
+        };
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            net_provider: Some(provider.clone()),
+            font_ctx: Some(font_ctx),
+            ..Default::default()
+        });
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let div = mutator.create_element(
+            qual_name!("div"),
+            vec![Attribute {
+                name: qual_name!("style"),
+                value: "font-family: 'Noto Sans'; font-weight: 300".to_string(),
+            }],
+        );
+        let text = mutator.create_text_node("ab");
+        mutator.append_children(div, &[text]);
+        mutator.append_children(body, &[div]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+
+        doc.resolve(0.0);
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec!["https://fonts.gstatic.com/s/notosans/v1/latin.0.woff2".to_string()],
+            "font-weight: 300 must fall back to the 400 Noto Sans slice"
+        );
+    }
+
+    /// The Google Fonts CSS bootstrap completes asynchronously — often after
+    /// the last event-driven resolve. Installing the slices must request a
+    /// redraw so the next resolve re-runs the pre-scan even when the event
+    /// loop would otherwise idle (no input events), or no slices are ever
+    /// scheduled until the user moves the mouse.
+    #[derive(Default)]
+    struct RedrawCountingShell {
+        redraw_requests: std::sync::atomic::AtomicUsize,
+    }
+
+    impl blitz_traits::shell::ShellProvider for RedrawCountingShell {
+        fn request_redraw(&self) {
+            self.redraw_requests
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn installing_slices_requests_redraw() {
+        let shell = Arc::new(RedrawCountingShell::default());
+        let mut doc = BaseDocument::new(DocumentConfig {
+            shell_provider: Some(shell.clone()),
+            ..Default::default()
+        });
+        let before = shell.redraw_requests.load(std::sync::atomic::Ordering::Relaxed);
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+        let after = shell.redraw_requests.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            after > before,
+            "installing slices must request a redraw so the pre-scan re-runs \
+             without input events"
+        );
+    }
+
+    /// AE4: the RTL sheet is bootstrapped lazily — the pre-scan requests it
+    /// only when Hebrew/Arabic text appears and no slice definitions for the
+    /// family are installed yet; the fetched sheet's slices are appended, and
+    /// a later scan schedules the actual WOFF2 slice.
+    const RTL_CSS_URL: &str =
+        "https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@400;700&display=swap";
+    const RTL_GOOGLE_CSS: &str = r#"
+@font-face {
+  font-family: 'Noto Sans Hebrew';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/notosanshebrew/v1/hebrew.0.woff2) format('woff2');
+  unicode-range: U+0590-05FF;
+}
+"#;
+
+    #[test]
+    fn rtl_sheet_bootstrapped_lazily_on_hebrew_text() {
+        let provider = Arc::new(MockFontProvider::new(false));
+        let mut doc = make_doc_with_text("אב", provider.clone());
+        doc.set_google_font_css_urls(HashMap::from([(
+            "Noto Sans Hebrew".to_string(),
+            RTL_CSS_URL.to_string(),
+        )]));
+        doc.resolve(0.0);
+
+        // Only the RTL CSS sheet is requested — no Hebrew WOFF2 yet, because
+        // the slice definitions don't exist until the sheet arrives (AE4).
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec![RTL_CSS_URL.to_string()],
+            "RTL text triggers the lazy RTL CSS bootstrap"
+        );
+
+        // Complete the sheet: slices are appended; the next scan schedules
+        // the Hebrew WOFF2 slice on demand.
+        let (url, handler) = provider.handlers.lock().unwrap().remove(0);
+        handler.bytes(
+            url,
+            blitz_traits::net::Bytes::from(RTL_GOOGLE_CSS.as_bytes().to_vec()),
+        );
+        doc.handle_messages();
+
+        doc.resolve(0.0);
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec![
+                RTL_CSS_URL.to_string(),
+                "https://fonts.gstatic.com/s/notosanshebrew/v1/hebrew.0.woff2".to_string(),
+            ],
+            "after the RTL sheet bootstraps, the Hebrew slice is scheduled on demand"
+        );
+
+        // Complete the WOFF2 (a valid OTF): registered under Noto Sans Hebrew,
+        // FontVersion bumps, coverage settles, and nothing re-fetches.
+        let (url, handler) = provider.handlers.lock().unwrap().remove(0);
+        handler.bytes(url, blitz_traits::net::Bytes::from(crate::BULLET_FONT.to_vec()));
+        doc.handle_messages();
+        assert_eq!(doc.font_version, 1);
+        assert!(doc.missing_font_coverage.is_empty());
+        doc.resolve(0.0);
+        assert_eq!(
+            provider.fetched.lock().unwrap().len(),
+            2,
+            "no re-fetch after the Hebrew slice is installed"
         );
     }
 }

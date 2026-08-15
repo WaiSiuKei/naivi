@@ -39,8 +39,30 @@ impl FontLoader {
         self.coverage_dirty = true;
     }
 
+    /// Append additional slice definitions (lazy CSS bootstrap, e.g. an RTL
+    /// sheet fetched on demand) without replacing the existing set. The
+    /// coverage index re-syncs once on the next scan.
+    pub fn append_slices(&mut self, slices: Vec<FontSlice>) {
+        self.slices.extend(slices);
+        self.coverage_dirty = true;
+    }
+
     pub fn slices(&self) -> &[FontSlice] {
         &self.slices
+    }
+
+    /// Sorted, deduplicated weights available for `family` + `style` in the
+    /// current slice set (used for CSS font-weight fallback).
+    fn weights_for(&self, family: &str, style: FontStyle) -> Vec<FontWeight> {
+        let mut v: Vec<FontWeight> = self
+            .slices
+            .iter()
+            .filter(|s| s.family == family && s.font.style == style)
+            .map(|s| s.font.weight)
+            .collect();
+        v.sort_by_key(|w| *w as i32);
+        v.dedup();
+        v
     }
 
     pub fn state(&self) -> &FontLoadState {
@@ -97,18 +119,35 @@ impl FontLoader {
             self.coverage_dirty = false;
         }
 
-        let font = FontDescriptor::new(family).with_style(style).with_weight(weight);
         let mut needed = Vec::new();
         for unit in units {
-            let request = FontSliceRequest {
-                font: font.clone(),
-                style,
+            // CSS font-weight fallback: the exact weight may not exist in the
+            // slice set (Google ships a sparse set, e.g. 400+700; text is
+            // often `font-light` 300 / `font-[200]`), so try the weights in
+            // CSS matching order (selection::weight_fallbacks). The slice
+            // chosen is registered under ITS weight on arrival; fontique then
+            // shapes the requested weight against the closest available.
+            let weights = crate::fonts::selection::weight_fallbacks(
                 weight,
-                text,
-            };
-            let Some(slice) =
-                find_matching_slice_indexed(&mut self.coverage, &request, unit, &self.slices)
-            else {
+                &self.weights_for(family, style),
+            );
+            let mut slice = None;
+            for w in &weights {
+                let font = FontDescriptor::new(family).with_style(style).with_weight(*w);
+                let request = FontSliceRequest {
+                    font,
+                    style,
+                    weight: *w,
+                    text,
+                };
+                if let Some(found) =
+                    find_matching_slice_indexed(&mut self.coverage, &request, unit, &self.slices)
+                {
+                    slice = Some(found);
+                    break;
+                }
+            }
+            let Some(slice) = slice else {
                 continue;
             };
             match self.state.status(&slice.url) {
