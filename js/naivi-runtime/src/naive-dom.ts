@@ -559,16 +559,26 @@ const _elByVid = new Map<number, NaiveElement>();
 function createNaiveDocument(): NaiveDocumentLike {
   const doc = {} as NaiveDocumentLike;
 
-  // UA-style default: the facade body fills the viewport, so host-created
-  // roots (and their percent-sized descendants) get a real layout container
-  // instead of collapsing to content size.
+  // UA-style default: mirror a full document — `<html>` as the document root
+  // with `<body>` as its child — so author-stylesheet root selectors
+  // (`html`, `html, :host`, `:root`) match. A body-only root (the previous
+  // shape) meant Tailwind v4 preflight's `html, :host { font-family: … }`
+  // never applied, leaving the initial `serif` family on every text node.
+  // Both boxes fill the viewport so percent-sized descendants get a real
+  // layout container instead of collapsing to content size.
+  const html = createNaiveElement("html");
+  nativeSetProp(html._mirror, "width", "100%");
+  nativeSetProp(html._mirror, "height", "100%");
+
   const body = createNaiveElement("body");
   nativeSetProp(body._mirror, "width", "100%");
   nativeSetProp(body._mirror, "height", "100%");
-  // Attach the body to the blitz document root so resolve / hit-test see a
+  html.appendChild(body);
+
+  // Attach the html to the blitz document root so resolve / hit-test see a
   // real DOM (blitz treats the root as DOM-less until it has an element
   // child; without this nothing renders and hittest warns "No DOM").
-  nativeAttachDocumentRoot(body._mirror);
+  nativeAttachDocumentRoot(html._mirror);
 
   // Fill in the doc shell — only the methods the naive renderer / host use.
   Object.assign(doc, {

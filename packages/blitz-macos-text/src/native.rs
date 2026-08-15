@@ -41,9 +41,28 @@ pub struct GlyphBitmap {
 /// Whether a postscript name belongs to a macOS system UI font (what
 /// `-apple-system`/`system-ui` shape to). CoreText refuses to create these by
 /// name and silently substitutes Times, so they must be rebuilt through the
-/// UI-font API, mirroring the fork's shaper.
+/// UI-font API (or the public PingFang face), mirroring the fork's shaper.
 fn is_system_ui_ps(name: &str) -> bool {
-    name.starts_with(".SF") || name.starts_with(".AppleSystemUIFont")
+    name.starts_with(".SF")
+        || name.starts_with(".AppleSystemUIFont")
+        || name.starts_with(".PingFang")
+}
+
+/// Rebuild a PingFang face from its internal UIDisplay postscript name (e.g.
+/// `".PingFangUIDisplaySC-Regular"`). CoreText refuses to create the
+/// dot-prefixed system-UI names by name and substitutes Times, but the public
+/// face (`"PingFangSC-Regular"`) is creatable normally and shares the same
+/// glyph outlines, so the rasterizer reproduces the fork's Han-script
+/// fallback font.
+fn ping_fang_font(key: &MacNativeFont) -> CTFont {
+    let public = key
+        .postscript_name
+        .strip_prefix('.')
+        .map(|n| n.replace("UIDisplay", ""))
+        .unwrap_or_else(|| key.postscript_name.clone());
+    let name = CFString::new(&public);
+    let descriptor = new_from_postscript_name(&name);
+    core_text::font::new_from_descriptor(&descriptor, key.size as f64)
 }
 
 /// Rebuild a system UI font from its postscript name via the UI-font API.
@@ -199,7 +218,11 @@ pub fn resolve_font(key: &MacNativeFont) -> CTFont {
         return font;
     }
     let font = if is_system_ui_ps(&key.postscript_name) {
-        system_ui_font(key)
+        if key.postscript_name.starts_with(".PingFang") {
+            ping_fang_font(key)
+        } else {
+            system_ui_font(key)
+        }
     } else {
         let name = CFString::new(&key.postscript_name);
         let descriptor = new_from_postscript_name(&name);
@@ -335,6 +358,27 @@ mod tests {
             assert!(
                 resolved.starts_with(".SF") || resolved.contains("SF"),
                 "expected an SF face for {ps}, got {resolved}"
+            );
+        }
+    }
+
+    #[test]
+    fn ping_fang_key_resolves_to_ping_fang_not_times() {
+        // The fork's Han-script fallback returns the PingFang UI face
+        // (".PingFangUIDisplaySC-Regular"); resolving it by name makes
+        // CoreText substitute Times, so the rasterizer maps it to the public
+        // face and must not get Times back.
+        for ps in [".PingFangUIDisplaySC-Regular", ".PingFangUIDisplaySC-Semibold"] {
+            let key = MacNativeFont {
+                postscript_name: ps.to_string(),
+                family_name: "PingFang SC".to_string(),
+                size: 32.0,
+                color: false,
+            };
+            let resolved = resolve_font(&key).postscript_name();
+            assert!(
+                resolved.contains("PingFang"),
+                "expected a PingFang face for {ps}, got {resolved}"
             );
         }
     }
