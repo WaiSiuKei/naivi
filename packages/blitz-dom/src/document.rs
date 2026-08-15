@@ -2372,6 +2372,7 @@ impl BaseDocument {
         // Focus the new node. When a native-edit session will own editing,
         // skip the winit IME enable/area calls — the native control owns IME
         // (KTD5, R2).
+        let ime_shell = shell_provider.clone();
         self.snapshot_node_and(focus_node_id, |node| {
             node.focus(shell_provider, !native_edit)
         });
@@ -2383,6 +2384,17 @@ impl BaseDocument {
         self.end_native_edit_session();
         if native_edit {
             self.start_native_edit_session(focus_node_id);
+            // Fail-close IME symmetry: if the session could not start (backend
+            // `create` returned false / extraction failed), the element keeps
+            // the parley path — which needs the winit IME that `focus(..)`
+            // above skipped.
+            if self.native_edit_session.is_none() {
+                ime_shell.set_ime_enabled(true);
+                if let Some(node) = self.get_node(focus_node_id) {
+                    let (x, y, width, height) = node.content_box_in_viewport();
+                    ime_shell.set_ime_cursor_area(x, y, width, height);
+                }
+            }
         }
 
         true

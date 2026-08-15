@@ -407,6 +407,13 @@ fn fail_close_keeps_parley_path_when_begin_returns_false() {
     doc.set_focus_to(input);
     // Session must not be marked active; the parley path remains.
     assert!(doc.native_edit_session.is_none());
+    // Fail-close IME symmetry: since the parley path is retained, the winit
+    // IME that `focus(..)` skipped must be re-enabled.
+    let calls = failing.calls.lock().unwrap();
+    assert!(
+        calls.contains(&"ime_enabled".to_string()),
+        "parley path must get winit IME after a failed session start, got {calls:?}"
+    );
 }
 
 #[test]
