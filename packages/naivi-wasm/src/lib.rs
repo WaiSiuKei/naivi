@@ -177,7 +177,11 @@ impl Document for DocHandle {
 
     fn poll(&mut self, _task_context: Option<TaskContext>) -> bool {
         // `&self`: the sink may re-enter Rust synchronously via the JS callback.
-        self.doc.borrow().drain_events()
+        let doc = self.doc.borrow();
+        // Dispatch native-edit session events (input / key / composition) to
+        // the guest (KTD8/KTD9), then drain the recorded queue through the sink.
+        doc.poll_native_edit_events();
+        doc.drain_events()
     }
 }
 

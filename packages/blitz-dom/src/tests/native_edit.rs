@@ -316,3 +316,42 @@ fn focus_skip_ime_for_session_element() {
     assert!(doc.set_focus_to(input));
     assert!(doc.native_edit_session.is_some());
 }
+
+#[test]
+fn refocusing_an_ended_session_restarts_it() {
+    // A session can end without a focus move (backend `Committed` on blur
+    // while the element keeps blitz focus). Re-clicking the still-focused
+    // covered input must reopen the control — `set_focus_to` returns false
+    // (focus unchanged) but still restarts the session.
+    let (mut doc, shell, input, _input2, _div) = make_doc("text");
+    doc.set_focus_to(input);
+    assert!(doc.native_edit_session.is_some());
+
+    doc.end_native_edit_session();
+    assert!(doc.native_edit_session.is_none());
+
+    assert!(!doc.set_focus_to(input));
+    assert!(doc.native_edit_session.is_some());
+    assert!(shell.calls.lock().unwrap().contains(&"begin".to_string()));
+
+    // An active session is not restarted on re-click.
+    doc.end_native_edit_session();
+    doc.set_focus_to(input);
+    let begins = shell
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c.as_str() == "begin")
+        .count();
+    assert!(!doc.set_focus_to(input));
+    assert!(doc.native_edit_session.is_some());
+    let begins2 = shell
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c.as_str() == "begin")
+        .count();
+    assert_eq!(begins2, begins, "active session must not be re-created");
+}

@@ -138,8 +138,14 @@ impl Document for DocHandle {
                 }
             }
         }
-        // Drain blitz-side events into the FFI queue.
-        let changed = self.doc.borrow().drain_events();
+        // Drain blitz-side events into the FFI queue: native-edit session
+        // events (input / key / composition, KTD8/KTD9) are dispatched to the
+        // guest first, then the recorded queue is drained through the sink.
+        let changed = {
+            let doc = self.doc.borrow();
+            doc.poll_native_edit_events();
+            doc.drain_events()
+        };
         // Deliver queued events to JS callbacks inside `ctx.with` (may
         // re-enter Rust synchronously via ops — the NaiviDocument borrow from
         // `drain_events` above is already released).

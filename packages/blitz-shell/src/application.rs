@@ -76,6 +76,11 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
             BlitzShellEvent::NativeEdit { doc_id, event } => {
                 if let Some(window) = self.window_mut_by_doc_id(doc_id) {
                     window.doc.handle_native_edit_event(event);
+                    // The engine queues guest-facing events (input / key /
+                    // composition) for the doc's `poll` drain; run it now so
+                    // the guest receives them promptly instead of waiting for
+                    // the next scheduled poll/redraw (KTD8/KTD9).
+                    window.poll();
                 }
             }
 

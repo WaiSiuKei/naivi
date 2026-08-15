@@ -110,7 +110,12 @@ fn setup_common(element: &web_sys::HtmlElement, canvas: &HtmlCanvasElement) {
 }
 
 fn with_dom<R>(f: impl FnOnce(&mut WasmNativeDom) -> R) -> Option<R> {
-    DOM.with(|slot| slot.borrow_mut().as_mut().map(f))
+    // `try_borrow_mut` (not `borrow_mut`): restoring canvas focus from
+    // `destroy` fires the overlay's `blur` synchronously, and its listener
+    // re-enters `with_dom` while the outer borrow is still live. A re-entrant
+    // call returns `None` instead of panicking ("RefCell already borrowed");
+    // the engine's stale-event guard drops anything it sends (KTD2).
+    DOM.with(|slot| slot.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
 fn is_composing() -> bool {
@@ -427,6 +432,18 @@ fn install_listeners(dom: &mut WasmNativeDom) {
             }
             if key == "Enter" && !m {
                 let _ = ev.prevent_default();
+                // Forward the full key sequence before the engine's `Submit`
+                // ends the session: the overlay is destroyed on submit, so a
+                // real `keyup` would be a stale event and the guest's
+                // `@keyup.enter` would never fire (KTD8).
+                send_native(NativeEditEvent::KeyDown {
+                    key: Key::Enter,
+                    code: Code::Enter,
+                });
+                send_native(NativeEditEvent::KeyUp {
+                    key: Key::Enter,
+                    code: Code::Enter,
+                });
                 send_native(NativeEditEvent::Submit);
                 return;
             }

@@ -2298,13 +2298,6 @@ impl BaseDocument {
         let Some(focus_node_id) = self.nearest_non_anonymous_ancestor(focus_node_id) else {
             return false;
         };
-        if Some(focus_node_id) == self.focus_node_id {
-            return false;
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::info!("Focussed node {focus_node_id}");
-
         let shell_provider = self.shell_provider.clone();
         // A native-edit session applies when the shell hosts a backend and the
         // target is a covered text input (R1).
@@ -2312,6 +2305,21 @@ impl BaseDocument {
             && self
                 .get_node(focus_node_id)
                 .is_some_and(|node| node.is_native_editable());
+
+        if Some(focus_node_id) == self.focus_node_id {
+            // Focus is already on this node. The native-edit session may have
+            // ended without a focus move (commit/blur while the element keeps
+            // blitz focus), so re-clicking a focused covered input must reopen
+            // the control (otherwise subsequent keystrokes hit the parley path
+            // or nothing at all).
+            if native_edit && self.native_edit_session.is_none() {
+                self.start_native_edit_session(focus_node_id);
+            }
+            return false;
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::info!("Focussed node {focus_node_id}");
 
         // Remove focus from the old node
         if let Some(id) = self.focus_node_id {
