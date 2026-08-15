@@ -29,6 +29,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod native_input;
 mod net;
 
 use std::cell::RefCell;
@@ -294,7 +295,24 @@ pub fn start() -> Result<(), JsValue> {
     let attrs = WindowAttributes::default().with_platform_attributes(Box::new(
         WindowAttributesWeb::default().with_canvas(Some(canvas)),
     ));
-    let window_config = WindowConfig::with_attributes(Box::new(DocHandle::new(doc)), renderer, attrs);
+    // Register the native text-input backend factory (U3). The factory runs
+    // inside the shell's window construction, where the winit window exists;
+    // it grabs the canvas, sets up the hidden overlay DOM, and installs the
+    // backend handle so DOM listeners can forward events to the shell.
+    let window_config = WindowConfig::with_attributes(Box::new(DocHandle::new(doc)), renderer, attrs)
+        .with_native_text_input(Box::new(|window, proxy, doc_id| {
+            use winit::platform::web::WindowExtWeb;
+            let Some(canvas) = window.canvas() else {
+                return None;
+            };
+            native_input::init_dom(canvas.clone());
+            let backend = native_input::WasmNativeTextInput::new(doc_id, proxy.clone());
+            native_input::set_backend(backend);
+            Some(Arc::new(native_input::WasmNativeTextInput::new(
+                doc_id,
+                proxy,
+            )))
+        }));
 
     let mut app = BlitzApplication::<VelloHybridWindowRenderer>::new(proxy, rx);
     app.add_window(window_config);

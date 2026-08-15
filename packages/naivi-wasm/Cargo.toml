@@ -30,11 +30,16 @@ wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = "0.3"
 futures = "0.3"
+keyboard-types = { workspace = true }
 tracing-wasm = { workspace = true }
 tracing = { workspace = true }
 web-sys = { workspace = true, features = [
     "Document",
+    "Element",
     "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
     "Window",
     "Request",
     "RequestInit",
@@ -42,4 +47,7 @@ web-sys = { workspace = true, features = [
     "Response",
     "AbortController",
     "AbortSignal",
+    "CompositionEvent",
+    "KeyboardEvent",
+    "InputEvent",
 ] }
