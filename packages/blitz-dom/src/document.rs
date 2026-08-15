@@ -645,6 +645,8 @@ impl BaseDocument {
             // Fail-close: keep the parley path.
             return;
         }
+        // Seed the control with the element's current value (R4).
+        self.shell_provider.native_edit_set_value(&value);
         self.native_edit_session = Some(NativeEditSession {
             node_id,
             geometry,
@@ -716,7 +718,6 @@ impl BaseDocument {
         );
 
         let resolve_w = CSSPixelLength::new(layout.size.width as _);
-        let resolve_h = CSSPixelLength::new(layout.size.height as _);
         style.border_radius = border
             .border_top_left_radius
             .0

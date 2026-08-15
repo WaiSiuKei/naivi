@@ -26,6 +26,8 @@
 //! subsequent [`Document::poll`] pumps guest microtasks and drains queued
 //! events.
 
+mod native_input;
+
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -256,7 +258,29 @@ fn main() {
     let (proxy, rx) = BlitzShellProxy::new(event_loop.create_proxy());
     let renderer = VelloHybridWindowRenderer::new();
     let handle = DocHandle::new(doc, Rc::clone(&guest));
-    let window = WindowConfig::new(Box::new(handle), renderer);
+    // Register the macOS native text-input backend factory (U4). The factory
+    // runs inside the shell's window construction — where the winit window
+    // exists — and obtains its NSView via `raw_window_handle` (AppKit).
+    let window = WindowConfig::new(Box::new(handle), renderer).with_native_text_input(Box::new(
+        |window, proxy, doc_id| {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+            let Ok(handle) = window.window_handle() else {
+                return None;
+            };
+            let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+                return None;
+            };
+            let ns_view = appkit.ns_view.as_ptr() as *mut std::ffi::c_void;
+            if ns_view.is_null() {
+                return None;
+            }
+            native_input::set_proxy(proxy);
+            Some(std::sync::Arc::new(native_input::MacOSNativeTextInput::new(
+                ns_view, doc_id,
+            )))
+        },
+    ));
 
     let mut app = BlitzApplication::<VelloHybridWindowRenderer>::new(proxy, rx);
     app.add_window(window);

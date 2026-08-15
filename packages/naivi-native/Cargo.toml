@@ -4,10 +4,14 @@ description = "naivi (Vue Vapor) generic native host — winit entry embedding t
 version = "0.0.0"
 edition = "2024"
 publish = false
+build = "build.rs"
 
 [[bin]]
 name = "naivi-native"
 path = "src/main.rs"
+
+[build-dependencies]
+cc = "1"
 
 [dependencies]
 # naivi bridge core (U3) + native FFI (U5)
@@ -19,6 +23,7 @@ anyrender_vello_hybrid = { workspace = true }
 blitz-dom = { workspace = true, features = ["system-fonts"] }
 blitz-shell = { workspace = true, default-features = false, features = ["tracing"] }
 blitz-traits = { workspace = true }
+raw-window-handle = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

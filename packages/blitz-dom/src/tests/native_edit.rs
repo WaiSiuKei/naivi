@@ -131,8 +131,10 @@ fn value_changed_mirrors_into_dom_and_dispatches_input() {
         .unwrap()
         .to_string();
     assert_eq!(attr_value, "hi");
-    // Mirrored: the engine must NOT push back into the control (no loop).
-    assert!(shell.set_values.lock().unwrap().is_empty());
+    // Mirrored: the engine must NOT push the mirrored value back into the
+    // control (no loop). The only push is the initial empty seed at session
+    // start.
+    assert!(!shell.set_values.lock().unwrap().contains(&"hi".to_string()));
     // Input dispatched to the guest queue.
     let pending = doc.drain_native_edit_events();
     assert_eq!(pending.len(), 1);
@@ -147,12 +149,16 @@ fn guest_value_set_pushes_to_control_without_input_event() {
     let (mut doc, shell, input, _input2, _div) = make_doc("text");
     doc.set_focus_to(input);
 
-    // Guest/programmatic set (the value-attribute frame path).
+    // Guest/programmatic set (the value-attribute frame path). The session
+    // start seeds an empty value first.
     let mut m = doc.mutate();
     m.set_attribute(input, qual_name!("value", html), "yo");
     drop(m);
 
-    assert_eq!(*shell.set_values.lock().unwrap(), vec!["yo".to_string()]);
+    assert_eq!(
+        *shell.set_values.lock().unwrap(),
+        vec!["".to_string(), "yo".to_string()]
+    );
     assert!(doc.native_edit_pending_events.is_empty());
 }
 
