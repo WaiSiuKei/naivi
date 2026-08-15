@@ -108,6 +108,9 @@ pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
 pub use util::{Point, decode_font_bytes};
 
+#[cfg(test)]
+mod tests;
+
 /// Convenience builder for the one-font case: produces a [`FontContext`] with
 /// system-font discovery disabled and the supplied font registered as the
 /// fallback for every generic family. The standard setup for WASM, where

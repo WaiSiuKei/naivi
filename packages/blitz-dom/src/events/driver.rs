@@ -151,6 +151,11 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         let mut should_clear_hover = false;
         let mut hover_node_id = doc.hover_node_id;
         let focussed_node_id = doc.focus_node_id;
+        // During a native-edit session the focused control owns keyboard/IME
+        // input: keys and composition arrive through `NativeEditEvent`, so
+        // winit key/IME events for the session element must not be re-dispatched
+        // (R2, KTD8). Pointer events elsewhere are unaffected.
+        let native_edit_active = doc.native_edit_session.is_some();
         drop(doc);
 
         // Update document input state (hover, focus, active, etc)
@@ -246,15 +251,27 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 self.handle_dom_event(DomEvent::new(target, DomEventData::Wheel(data)))
             }
             UiEvent::KeyUp(data) => {
+                if native_edit_active {
+                    return;
+                }
                 self.handle_dom_event(DomEvent::new(target, DomEventData::KeyUp(data)))
             }
             UiEvent::KeyDown(data) => {
+                if native_edit_active {
+                    return;
+                }
                 self.handle_dom_event(DomEvent::new(target, DomEventData::KeyDown(data)))
             }
             UiEvent::Ime(data) => {
+                if native_edit_active {
+                    return;
+                }
                 self.handle_dom_event(DomEvent::new(target, DomEventData::Ime(data)))
             }
             UiEvent::AppleStandardKeybinding(data) => {
+                if native_edit_active {
+                    return;
+                }
                 let mut dom_event =
                     DomEvent::new(target, DomEventData::AppleStandardKeybinding(data));
                 self.run_default_action(&mut dom_event);
@@ -271,6 +288,14 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     pub fn handle_dom_event(&mut self, event: DomEvent) {
         self.queue.push_back(event);
         self.process_queue();
+    }
+
+    /// Dispatch a DOM event through the handler chain only (guest listeners),
+    /// skipping default actions. Used for events forwarded by a native-edit
+    /// session (input / key / composition), which must never reach the parley
+    /// editor (KTD8/KTD9, R2).
+    pub fn handle_event_to_handler(&mut self, mut event: DomEvent) {
+        let _ = self.run_handler_event(&mut event, EventState::default());
     }
 
     fn handle_pointer_event(

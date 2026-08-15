@@ -514,18 +514,29 @@ impl Node {
             .is_some_and(|data| data.element_state.contains(ElementState::HOVER))
     }
 
-    pub fn focus(&mut self, shell_provider: Arc<dyn ShellProvider>) {
+    /// Whether this element is a covered native-edit input: a text input or
+    /// textarea (the same set `create_text_editor` builds, R1).
+    pub fn is_native_editable(&self) -> bool {
+        self.element_data()
+            .and_then(|element| element.text_input_data())
+            .is_some()
+    }
+
+    pub fn focus(&mut self, shell_provider: Arc<dyn ShellProvider>, enable_ime: bool) {
         if let Some(data) = self.element_data_mut() {
             data.element_state
                 .insert(ElementState::FOCUS | ElementState::FOCUSRING);
         }
         self.set_restyle_hint(RestyleHint::restyle_subtree());
 
-        // If focussing a text input, enable IME and set IME area
-        if self
-            .element_data()
-            .and_then(|elem| elem.text_input_data())
-            .is_some()
+        // If focussing a text input, enable IME and set IME area. When a
+        // native-edit session owns editing, the native control handles IME, so
+        // the winit IME enable/area calls are skipped (KTD5, R2).
+        if enable_ime
+            && self
+                .element_data()
+                .and_then(|elem| elem.text_input_data())
+                .is_some()
         {
             shell_provider.set_ime_enabled(true);
             let mut pos = self.absolute_position(0.0, 0.0);

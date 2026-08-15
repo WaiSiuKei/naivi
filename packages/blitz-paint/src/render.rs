@@ -800,8 +800,16 @@ impl ElementCx<'_, '_> {
             let transform = self.transform
                 * Affine::translate((pos.x * self.scale - scroll_x, pos.y * self.scale - scroll_y));
 
-            if self.node.is_focussed() {
-                // Render selection/caret
+            if self.node.is_focussed()
+                && !self
+                    .context
+                    .dom
+                    .native_edit_session
+                    .as_ref()
+                    .is_some_and(|session| session.node_id == self.node.id)
+            {
+                // Render selection/caret (skipped for the native-edit session
+                // node — the native control draws its own caret, R2).
                 for (rect, _line_idx) in input_data.editor.selection_geometry().iter() {
                     scene.fill(
                         Fill::NonZero,

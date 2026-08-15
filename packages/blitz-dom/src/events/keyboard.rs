@@ -124,7 +124,7 @@ impl BaseDocument {
 }
 
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#field-that-blocks-implicit-submission
-fn implicit_form_submission(doc: &BaseDocument, text_target: NodeId) {
+pub(crate) fn implicit_form_submission(doc: &BaseDocument, text_target: NodeId) {
     let Some(form_owner_id) = doc.controls_to_form.get(&text_target) else {
         return;
     };

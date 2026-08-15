@@ -322,6 +322,19 @@ impl DocumentMutator<'_> {
                     value,
                 );
             }
+            // R5 (KTD6): push a guest/programmatic value into the active
+            // native control. Suppressed while the engine mirrors the control's
+            // own edit back into the DOM (avoids a mirror loop) and when the
+            // session belongs to a different node.
+            if !self.doc.native_edit_mirror_in_progress
+                && self
+                    .doc
+                    .native_edit_session
+                    .as_ref()
+                    .is_some_and(|session| session.node_id == node_id)
+            {
+                self.doc.shell_provider.native_edit_set_value(value);
+            }
             return;
         }
 

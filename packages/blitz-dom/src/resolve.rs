@@ -115,6 +115,12 @@ impl BaseDocument {
         self.resolve_transforms(root_node_id);
         timer.record_time("transform");
 
+        // Re-push the native-edit overlay geometry/style when the session
+        // element's box moved (layout, resize, or scroll — scroll offsets are
+        // folded into `absolute_position`) (R10, R12).
+        self.update_native_edit_session_geometry();
+        timer.record_time("native-edit");
+
         // Clear all damage and dirty flags
         if self.incremental_layout {
             for (_, node) in self.nodes.iter_mut() {
