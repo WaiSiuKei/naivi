@@ -75,6 +75,18 @@ fn bootstrap_fonts(doc: Rc<RefCell<NaiviDocument>>) {
             Ok(css) => {
                 let slices = parse_font_css(&css);
                 info!("bootstrap: {DEFAULT_FONT_CSS_URL} -> {} slices", slices.len());
+                // Register the same `@font-face` rules in the BROWSER so the
+                // native-edit overlay (a real DOM `<input>`) can render with
+                // the Noto families the canvas shapes with — the overlay is a
+                // browser element and cannot see the wasm font context.
+                if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                    if let Ok(Some(head)) = document.query_selector("head") {
+                        if let Ok(style) = document.create_element("style") {
+                            let _ = style.set_text_content(Some(&css));
+                            let _ = head.append_child(&style);
+                        }
+                    }
+                }
                 if slices.is_empty() {
                     return;
                 }

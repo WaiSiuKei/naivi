@@ -115,11 +115,11 @@ taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "2e4dbc55bf27a6d6f1
     "calc",
     "detailed_layout_info",
 ] }
-# macOS CoreText text backend: naivi-maintained parley fork (WaiSiuKei/naivi-parley),
-# pinned at the v0.10.0 baseline + CoreText backend (branch coretext-backend-v0.10).
-# Non-macOS builds use the identical harfrust path as upstream 0.10. Refresh the rev
+# macOS CoreText text backend + Google Fonts slice shaping: naivi-maintained
+# parley fork (WaiSiuKei/naivi-parley), branch `font-slice-fixes` (based on
+# coretext-backend-v0.10 + fontique multi-face/wght fixes). Refresh the rev
 # after each fork rebase (see docs/plans/2026-08-14-1015-feat-macos-coretext-text-backend-plan.md R8).
-parley = { git = "https://github.com/WaiSiuKei/naivi-parley", rev = "8a62f9ad11745dac4190238d15b044afe8e79e86", default-features = false, features = ["std"] }
+parley = { git = "https://github.com/WaiSiuKei/naivi-parley", rev = "680123aa3d27a563f93254d472b1b47213d4bcf5", default-features = false, features = ["std"] }
 skrifa = { version = "0.42", default-features = false, features = [
     "std",
 ] } # Should match parley and vello versions

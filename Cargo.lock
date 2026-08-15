@@ -2946,7 +2946,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.10.0"
-source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=8a62f9ad11745dac4190238d15b044afe8e79e86#8a62f9ad11745dac4190238d15b044afe8e79e86"
+source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=680123aa3d27a563f93254d472b1b47213d4bcf5#680123aa3d27a563f93254d472b1b47213d4bcf5"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -5430,12 +5430,12 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=8a62f9ad11745dac4190238d15b044afe8e79e86#8a62f9ad11745dac4190238d15b044afe8e79e86"
+source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=680123aa3d27a563f93254d472b1b47213d4bcf5#680123aa3d27a563f93254d472b1b47213d4bcf5"
 
 [[package]]
 name = "parley"
 version = "0.10.0"
-source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=8a62f9ad11745dac4190238d15b044afe8e79e86#8a62f9ad11745dac4190238d15b044afe8e79e86"
+source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=680123aa3d27a563f93254d472b1b47213d4bcf5#680123aa3d27a563f93254d472b1b47213d4bcf5"
 dependencies = [
  "core-foundation 0.10.1",
  "core-text",
@@ -5454,7 +5454,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.10.0"
-source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=8a62f9ad11745dac4190238d15b044afe8e79e86#8a62f9ad11745dac4190238d15b044afe8e79e86"
+source = "git+https://github.com/WaiSiuKei/naivi-parley?rev=680123aa3d27a563f93254d472b1b47213d4bcf5#680123aa3d27a563f93254d472b1b47213d4bcf5"
 dependencies = [
  "icu_properties",
 ]

@@ -175,6 +175,54 @@ fn guest_value_set_pushes_to_control_without_input_event() {
     assert!(doc.native_edit_pending_events.is_empty());
 }
 
+/// While the session owns the node, keystroke mirrors must NOT paint the
+/// value into the canvas input (the HTML overlay is the visible editor — no
+/// duplicate/overlapping text, and no tofu before the script's slices load);
+/// the final blur-commit must paint the settled value.
+#[test]
+fn keystroke_mirrors_suppress_canvas_paint_until_commit() {
+    let (mut doc, _shell, input, _input2, _div) = make_doc("text");
+    doc.set_focus_to(input);
+    let editor_text = |doc: &BaseDocument| {
+        doc.get_node(input)
+            .and_then(|n| n.element_data())
+            .and_then(|e| e.text_input_data())
+            .map(|d| d.editor.text().to_string())
+            .unwrap()
+    };
+    // Session start clears the canvas input's text (nothing stale underneath).
+    assert_eq!(editor_text(&doc), "");
+
+    // Keystroke mirror (ValueChanged): value attribute updates, canvas text
+    // stays empty.
+    doc.handle_native_edit_event(NativeEditEvent::ValueChanged {
+        node_id: input,
+        value: "中文".to_string(),
+    });
+    let attr = doc
+        .get_node(input)
+        .and_then(|n| n.element_data())
+        .and_then(|e| e.attr(markup5ever::local_name!("value")))
+        .unwrap()
+        .to_string();
+    assert_eq!(attr, "中文");
+    assert_eq!(
+        editor_text(&doc),
+        "",
+        "keystroke mirror must not paint into the canvas input"
+    );
+    assert!(doc.native_edit_paint_suppressed);
+
+    // Final blur-commit: paints the settled value and ends the session.
+    doc.handle_native_edit_event(NativeEditEvent::Committed {
+        node_id: input,
+        value: "中文测试".to_string(),
+    });
+    assert_eq!(editor_text(&doc), "中文测试");
+    assert!(doc.native_edit_session.is_none(), "commit ends the session");
+    assert!(!doc.native_edit_paint_suppressed);
+}
+
 #[test]
 fn tab_traversal_ends_old_session_and_starts_next() {
     let (mut doc, shell, input, _input2, _div) = make_doc("text");
@@ -300,8 +348,11 @@ fn composition_commit_reaches_guest_without_parley_edit() {
         pending[1].data,
         blitz_traits::events::DomEventData::Input(ref e) if e.value == "中"
     ));
-    // The committed text is mirrored into the value attribute (R4/R8), which
-    // also syncs the parley editor text (the mirror path — not a double insert).
+    // The committed text is mirrored into the value attribute (R4/R8). The
+    // parley editor is NOT synced mid-session: the HTML overlay is the
+    // visible editor, so the canvas input must not paint (duplicate text /
+    // tofu before the script's slices load). The final blur-commit paints
+    // the settled value.
     let attr_value = doc
         .get_node(input)
         .and_then(|n| n.element_data())
@@ -309,14 +360,13 @@ fn composition_commit_reaches_guest_without_parley_edit() {
         .unwrap()
         .to_string();
     assert_eq!(attr_value, "中");
-    // Parley editor mirrors the value exactly once (no double text from the
-    // IME path — the Ime event was guest-only).
+    // Parley editor stays empty mid-session (paint suppressed).
     let editor_text = doc
         .get_node(input)
         .and_then(|n| n.element_data())
         .and_then(|e| e.text_input_data())
         .map(|d| d.editor.raw_text().to_string());
-    assert_eq!(editor_text.as_deref(), Some("中"));
+    assert_eq!(editor_text.as_deref(), Some(""));
 }
 
 #[test]

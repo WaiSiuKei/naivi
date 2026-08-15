@@ -428,6 +428,12 @@ pub struct BaseDocument {
     /// value attribute; suppresses the R5 programmatic push to avoid a mirror
     /// loop between the control and the DOM value.
     pub native_edit_mirror_in_progress: bool,
+    /// True while a native-edit session is live-mirroring keystrokes: the
+    /// canvas input must not paint the mirrored text (the HTML overlay is the
+    /// visible editor; painting it would show duplicate/overlapping text —
+    /// tofu before the script's slices load). Cleared on the final
+    /// blur-commit and on session end so the canvas shows the settled value.
+    pub native_edit_paint_suppressed: bool,
 }
 
 /// An active native-edit session: a focused text input/textarea whose editing
@@ -615,6 +621,11 @@ impl BaseDocument {
         if !is_unchanged {
             // Mirror into the value attribute + editor. `native_edit_mirror_in_progress`
             // suppresses the R5 programmatic push, preventing a mirror loop.
+            // Keystroke mirrors (not the final commit) also suppress painting
+            // the value in the canvas — the HTML overlay is the visible editor
+            // while the session runs (the canvas would show duplicate text,
+            // and tofu before the script's slices load).
+            self.native_edit_paint_suppressed = !end_session;
             self.native_edit_mirror_in_progress = true;
             let qname = qual_name!("value", html);
             let mut mutator = DocumentMutator::new(self);
@@ -642,6 +653,10 @@ impl BaseDocument {
             return;
         }
         self.native_edit_session = None;
+        // Re-enable canvas painting of the input value now that the overlay
+        // is gone (the final blur-commit already mirrored the settled value;
+        // this also covers the Submit path, which ends without a commit).
+        self.native_edit_paint_suppressed = false;
         self.shell_provider.end_native_edit_session();
     }
 
@@ -676,6 +691,18 @@ impl BaseDocument {
         }
         // Seed the control with the element's current value (R4).
         self.shell_provider.native_edit_set_value(&value);
+        // The HTML overlay is now the visible editor: clear the canvas
+        // input's parley text so no stale/duplicate value shows underneath
+        // while the session runs (R13). `self.nodes` is borrowed by field so
+        // `font_ctx`/`layout_ctx` (separate fields) stay accessible.
+        if let Some(input_data) = self
+            .nodes
+            .get_mut(node_id)
+            .and_then(|n| n.element_data_mut())
+            .and_then(|e| e.text_input_data_mut())
+        {
+            input_data.set_text(&mut self.font_ctx.lock().unwrap(), &mut self.layout_ctx, "");
+        }
         self.native_edit_session = Some(NativeEditSession {
             node_id,
             geometry,
@@ -964,6 +991,7 @@ impl BaseDocument {
             native_edit_session: None,
             native_edit_pending_events: VecDeque::new(),
             native_edit_mirror_in_progress: false,
+            native_edit_paint_suppressed: false,
             last_mousedown_time: None,
             mousedown_position: taffy::Point::ZERO,
             click_count: 0,
@@ -1799,19 +1827,35 @@ impl BaseDocument {
         // borrow ends before we mutate loader / coverage state.
         let mut scans: Vec<(String, NodeId)> = Vec::new();
         for (id, node) in self.nodes.iter() {
-            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) || !node.is_text_node() {
+            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
                 continue;
             }
-            let text = node.text_content();
-            if text.is_empty() {
-                continue;
+            if node.is_text_node() {
+                let text = node.text_content();
+                if text.is_empty() {
+                    continue;
+                }
+                // Text nodes carry no computed style; use the nearest element
+                // ancestor (the inline context) for the font-family.
+                let Some(element_id) = self.nearest_surviving_element_ancestor(id) else {
+                    continue;
+                };
+                scans.push((text, element_id));
+            } else if let Some(element) = node.element_data() {
+                // `<input>`/`<textarea>` values carry text that needs font
+                // coverage too (e.g. CJK typed into a native-edit control):
+                // the value lives in the `value` attribute, not a text node,
+                // so without this it would never be pre-scanned and would
+                // paint as tofu (missing-glyph boxes) until the script's
+                // slice happened to load for unrelated text.
+                let tag = &element.name.local;
+                if (*tag == local_name!("input") || *tag == local_name!("textarea"))
+                    && let Some(value) = element.attr(local_name!("value"))
+                    && !value.is_empty()
+                {
+                    scans.push((value.to_string(), id));
+                }
             }
-            // Text nodes carry no computed style; use the nearest element
-            // ancestor (the inline context) for the font-family.
-            let Some(element_id) = self.nearest_surviving_element_ancestor(id) else {
-                continue;
-            };
-            scans.push((text, element_id));
         }
 
         // Slice URLs to fetch this scan, plus the nodes each URL must re-layout
@@ -4007,6 +4051,112 @@ mod font_slice_tests {
         doc.resolve(0.0);
         assert_eq!(provider.fetched.lock().unwrap().len(), 1, "failed slice must not re-fetch");
         assert_eq!(doc.font_version, 0);
+    }
+
+    /// A document with one `<input type="text" value="{value}">` (no text
+    /// nodes) and Google slices installed.
+    fn make_doc_with_input_value(
+        value: &str,
+        provider: Arc<MockFontProvider>,
+    ) -> (BaseDocument, NodeId) {
+        let font_ctx = {
+            use parley::fontique::{Collection, CollectionOptions, FontInfoOverride, SourceCache};
+            let mut ctx = FontContext {
+                source_cache: SourceCache::new_shared(),
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+            };
+            // DejaVu covers basic Latin (the bundled bullet font does not), so
+            // a Latin-only value is deterministically covered and schedules
+            // nothing, while CJK stays uncovered.
+            let dejavu = wuff::decompress_woff2(include_bytes!(
+                "../../blitz-paint/assets/DejaVuSans.woff2"
+            ))
+            .expect("DejaVu woff2 decompress");
+            ctx.collection.register_fonts(
+                Blob::new(Arc::new(dejavu)),
+                Some(FontInfoOverride {
+                    family_name: Some("Noto Sans"),
+                    ..Default::default()
+                }),
+            );
+            ctx
+        };
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            net_provider: Some(provider),
+            font_ctx: Some(font_ctx),
+            ..Default::default()
+        });
+        doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
+
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let input = mutator.create_element(
+            qual_name!("input"),
+            vec![
+                Attribute {
+                    name: qual_name!("type"),
+                    value: "text".to_string(),
+                },
+                Attribute {
+                    name: qual_name!("value"),
+                    value: value.to_string(),
+                },
+                // Align the computed font-family with the DejaVu alias so
+                // Latin values are deterministically covered (tests run
+                // without the UA stylesheet's input font stack).
+                Attribute {
+                    name: qual_name!("style"),
+                    value: "font-family: 'Noto Sans'".to_string(),
+                },
+            ],
+        );
+        mutator.append_children(body, &[input]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+        (doc, input)
+    }
+
+    /// An `<input value="中">`'s value text is pre-scanned too: the value
+    /// lives in the `value` attribute, not a text node, so without this the
+    /// CJK slice would never be scheduled and the input would paint tofu.
+    #[test]
+    fn pre_scan_schedules_slice_fetch_for_input_value() {
+        let provider = Arc::new(MockFontProvider::new(true));
+        let (mut doc, _input) = make_doc_with_input_value("中", provider.clone());
+        doc.resolve(0.0);
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec!["https://fonts.gstatic.com/s/notosanssc/v1/cjk.0.woff2".to_string()]
+        );
+    }
+
+    /// After the settle gate reaches steady state, changing an input's
+    /// `value` attribute re-opens the pre-scan so newly typed text (e.g. CJK
+    /// mirroring into the input during a native-edit session) schedules the
+    /// slice instead of being skipped forever.
+    #[test]
+    fn value_attribute_change_reopens_pre_scan() {
+        let provider = Arc::new(MockFontProvider::new(true));
+        let (mut doc, input) = make_doc_with_input_value("ab", provider.clone());
+        // Latin is covered by the installed bullet font: nothing scheduled.
+        doc.resolve(0.0);
+        assert!(provider.fetched.lock().unwrap().is_empty());
+        // Mirror CJK into the input; `set_attribute` must re-open the scan.
+        let mut mutator = doc.mutate();
+        mutator.set_attribute(input, qual_name!("value"), "中");
+        drop(mutator);
+        doc.resolve(0.0);
+        assert_eq!(
+            *provider.fetched.lock().unwrap(),
+            vec!["https://fonts.gstatic.com/s/notosanssc/v1/cjk.0.woff2".to_string()]
+        );
     }
 
     /// Pins the URL-dedup + completion path end to end: the CJK slice is

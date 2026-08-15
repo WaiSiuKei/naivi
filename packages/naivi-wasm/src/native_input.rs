@@ -1,13 +1,15 @@
 //! wasm native text-input backend: a DOM `<input>`/`<textarea>` overlay placed
 //! over the `#blitz-target` canvas, owned by the engine's native-edit session.
 //!
-//! The overlay is a child of the canvas, absolutely positioned, and hidden
-//! (`display:none`) until a session begins. It is excluded from the
-//! accessibility tree (`aria-hidden` + `tabindex="-1"`); the canvas node stays
-//! authoritative. All key/composition listeners call `stopPropagation` — the
-//! overlay is a canvas child, so bubbled events would otherwise reach winit's
-//! canvas listeners (R2, KTD5). Events are forwarded through the shell proxy
-//! as `BlitzShellEvent::NativeEdit` (KTD2).
+//! The overlay is a sibling of the canvas (appended to `document.body`),
+//! absolutely positioned, and hidden (`display:none`) until a session begins.
+//! It must NOT be a canvas child: browsers refuse text insertion into form
+//! controls nested inside a `<canvas>` (a replaced element), so a canvas-nested
+//! overlay would never fire `input`. It is excluded from the accessibility
+//! tree (`aria-hidden` + `tabindex="-1"`); the canvas node stays authoritative.
+//! All key/composition listeners call `stopPropagation` so events never reach
+//! winit's window-level listeners (R2, KTD5). Events are forwarded through the
+//! shell proxy as `BlitzShellEvent::NativeEdit` (KTD2).
 //!
 //! All DOM state lives in a `thread_local` (wasm is single-threaded and the
 //! DOM types are not `Send`); the backend itself is a `Send + Sync` handle
@@ -75,14 +77,14 @@ pub fn init_dom(canvas: HtmlCanvasElement) {
             .expect("failed to create input")
             .dyn_into::<HtmlInputElement>()
             .expect("not an input element");
-        setup_common(&input, &canvas);
+        setup_common(&input);
 
         let textarea = document
             .create_element("textarea")
             .expect("failed to create textarea")
             .dyn_into::<HtmlTextAreaElement>()
             .expect("not a textarea element");
-        setup_common(&textarea, &canvas);
+        setup_common(&textarea);
         // The resize handle must not desync the overlay from the box (D8).
         let _ = textarea.style().set_property("resize", "none");
 
@@ -108,10 +110,12 @@ pub fn set_backend(backend: WasmNativeTextInput) {
     BACKEND.with(|slot| *slot.borrow_mut() = Some(backend));
 }
 
-fn setup_common(element: &web_sys::HtmlElement, canvas: &HtmlCanvasElement) {
+fn setup_common(element: &web_sys::HtmlElement) {
     let style = element.style();
     let _ = style.set_property("position", "absolute");
-    let _ = style.set_property("z-index", "100");
+    // Sits above everything in the root stacking context (it is no longer
+    // nested in the canvas, so it must outrank any canvas stacking context).
+    let _ = style.set_property("z-index", "2147483647");
     let _ = style.set_property("display", "none");
     let _ = style.set_property("box-sizing", "border-box");
     let _ = style.set_property("margin", "0");
@@ -120,7 +124,13 @@ fn setup_common(element: &web_sys::HtmlElement, canvas: &HtmlCanvasElement) {
     let _ = element.set_attribute("tabindex", "-1");
     let _ = element.set_attribute("autocomplete", "off");
     let _ = element.set_attribute("spellcheck", "false");
-    let _ = canvas.append_child(element);
+    // Mount on `document.body` as a canvas SIBLING, not a canvas child:
+    // browsers do not insert text into form controls nested inside a `<canvas>`
+    // (a replaced element), so a canvas-nested overlay never fires `input`.
+    let document = web_sys::window()
+        .and_then(|w| w.document())
+        .expect("no document");
+    let _ = document.body().expect("no body").append_child(element);
 }
 
 fn with_dom<R>(f: impl FnOnce(&mut WasmNativeDom) -> R) -> Option<R> {
@@ -337,7 +347,12 @@ fn css_color(c: (f32, f32, f32, f32)) -> String {
 fn apply_style(element: &web_sys::HtmlElement, style: &NativeEditStyle) {
     let css = element.style();
     if !style.font_family.is_empty() {
-        let _ = css.set_property("font-family", &style.font_family);
+        // Prefer the Google Noto families (registered in the page from the
+        // bootstrap CSS) so the overlay renders with the same fonts the
+        // canvas shapes with; the browser falls back for glyphs they don't
+        // cover. Noto Sans SC carries CJK, Noto Sans carries Latin/Common.
+        let family = format!("'Noto Sans SC','Noto Sans',{}", style.font_family);
+        let _ = css.set_property("font-family", &family);
     }
     if style.font_size > 0.0 {
         let _ = css.set_property("font-size", &format!("{}px", style.font_size));
@@ -478,8 +493,9 @@ fn install_listeners(dom: &mut WasmNativeDom) {
 
         // input → ValueChanged (skipped during IME composition)
         let oninput = Closure::wrap(Box::new(move || {
-            if !is_composing() {
-                let value = current_value(m);
+            let composing = is_composing();
+            let value = current_value(m);
+            if !composing {
                 send_native(move |node_id| NativeEditEvent::ValueChanged { node_id, value });
             }
         }) as Box<dyn FnMut()>);
@@ -504,11 +520,18 @@ fn install_listeners(dom: &mut WasmNativeDom) {
         let _ = element.add_event_listener_with_callback("compositionupdate", on_update.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_update));
 
-        let on_end = Closure::wrap(Box::new(move |ev: web_sys::CompositionEvent| {
+        let on_end = Closure::wrap(Box::new(move || {
+            // macOS IME quirk: `compositionend.data` carries only the newly
+            // committed segment (e.g. "测试"), NOT the control's full text
+            // ("中文测试" after two composition runs). The browser has already
+            // inserted the committed text into the control by this point, so
+            // mirror the control's current value instead of the partial event
+            // data — otherwise the engine overwrites the full value with the
+            // last segment.
+            let text = current_value(m);
             set_composing(false);
-            let text = ev.data().unwrap_or_default();
             send_native(move |node_id| NativeEditEvent::CompositionCommit { node_id, text });
-        }) as Box<dyn FnMut(_)>);
+        }) as Box<dyn FnMut()>);
         let _ = element.add_event_listener_with_callback("compositionend", on_end.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_end));
 
@@ -555,9 +578,14 @@ fn install_listeners(dom: &mut WasmNativeDom) {
         let _ = element.add_event_listener_with_callback("keydown", on_keydown.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_keydown));
 
-        // keyup → KeyUp; stopPropagation
+        // keyup → KeyUp; stopPropagation. IME keys are owned by the
+        // composition: suppress their keyup so the guest never sees a
+        // half-committed key sequence (KTD8 symmetry with keydown).
         let on_keyup = Closure::wrap(Box::new(move |ev: web_sys::KeyboardEvent| {
             let _ = ev.stop_propagation();
+            if ev.is_composing() {
+                return;
+            }
             let key = ev.key().parse().unwrap_or(Key::Unidentified);
             let code = ev.code().parse().unwrap_or(Code::Unidentified);
             send_native(move |node_id| NativeEditEvent::KeyUp { node_id, key, code });

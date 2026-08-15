@@ -314,13 +314,23 @@ impl DocumentMutator<'_> {
         }
 
         if *attr == local_name!("value") {
-            if let Some(input_data) = element.text_input_data_mut() {
-                // Update text input value
-                input_data.set_text(
-                    &mut self.doc.font_ctx.lock().unwrap(),
-                    &mut self.doc.layout_ctx,
-                    value,
-                );
+            // New value text may need a font slice the settle gate stopped
+            // scanning for (e.g. CJK typed into a native-edit input); re-open
+            // the pre-scan so the input's value is scanned too (R8).
+            self.doc.font_scan_needed = true;
+            // While the native overlay owns editing, don't paint the mirrored
+            // value in the canvas (duplicate/overlapping text — tofu before
+            // the script's slices load); the final blur-commit and session end
+            // clear the flag so the canvas shows the settled value.
+            if !self.doc.native_edit_paint_suppressed {
+                if let Some(input_data) = element.text_input_data_mut() {
+                    // Update text input value
+                    input_data.set_text(
+                        &mut self.doc.font_ctx.lock().unwrap(),
+                        &mut self.doc.layout_ctx,
+                        value,
+                    );
+                }
             }
             // R5 (KTD6): push a guest/programmatic value into the active
             // native control. Suppressed while the engine mirrors the control's
