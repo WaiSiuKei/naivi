@@ -3435,6 +3435,12 @@ mod font_slice_tests {
     /// family (so Latin text is covered by an installed font) and two sibling
     /// divs, both with explicit `font-family: 'Noto Sans'`: one with uncovered
     /// CJK text (schedules the CJK slice), one with covered Latin text.
+    ///
+    /// The divs are forced `display: block` because tests run without the UA
+    /// stylesheet: an unstyled `div` computes to `display: inline`, which would
+    /// collapse both siblings into one shared inline root (e.g. body) and make
+    /// targeted-invalidation assertions impossible. As blocks, each div is its
+    /// own inline root.
     fn make_r7_doc(provider: Arc<MockFontProvider>) -> (BaseDocument, NodeId, NodeId) {
         let font_ctx = {
             use parley::fontique::{Collection, CollectionOptions, FontInfoOverride, SourceCache};
@@ -3468,9 +3474,12 @@ mod font_slice_tests {
         doc.set_google_font_slices(parse_font_css(GOOGLE_CSS));
 
         let root_id = doc.root_node().id;
+        // Explicit `display: block` (the UA stylesheet normally provides it;
+        // tests run without one) so each div establishes its own inline root
+        // and the two siblings do NOT share body's inline layout.
         let noto = Attribute {
             name: qual_name!("style"),
-            value: "font-family: 'Noto Sans'".to_string(),
+            value: "display: block; font-family: 'Noto Sans'".to_string(),
         };
         let mut mutator = doc.mutate();
         let html = mutator.create_element(qual_name!("html"), vec![]);
@@ -3570,25 +3579,27 @@ mod font_slice_tests {
         doc.handle_messages();
 
         // AE6: the inline root that actually re-shapes is re-damaged, while a
-        // covered sibling's inline root stays untouched. The inline root may
-        // be an ancestor of the recorded element (e.g. body), so resolve it
-        // at assertion time.
+        // covered sibling's inline root stays untouched. Each div is
+        // `display: block` (see make_r7_doc) so it is its own inline root and
+        // the two siblings do not share one. `damage()` returns `Some` for any
+        // styled element even when the damage bitset is empty, so assert on
+        // non-empty damage.
         let waiting_root = doc
             .get_node(waiting)
-            .and_then(|n| n.inline_root_ancestor().map(|root| root.id));
+            .and_then(|n| n.inline_root_ancestor().map(|root| root.id))
+            .expect("waiting text has an inline root");
         let covered_root = doc
             .get_node(covered)
-            .and_then(|n| n.inline_root_ancestor().map(|root| root.id));
-        let waiting_root = waiting_root.expect("waiting text has an inline root");
-        let covered_root = covered_root.expect("covered text has an inline root");
+            .and_then(|n| n.inline_root_ancestor().map(|root| root.id))
+            .expect("covered text has an inline root");
         let waiting_damaged = doc
             .get_node(waiting_root)
             .and_then(|n| n.damage())
-            .is_some();
+            .is_some_and(|d| !d.is_empty());
         let covered_damaged = doc
             .get_node(covered_root)
             .and_then(|n| n.damage())
-            .is_some();
+            .is_some_and(|d| !d.is_empty());
         assert!(
             waiting_damaged,
             "waiting inline root must be re-damaged on slice arrival (AE6)"
