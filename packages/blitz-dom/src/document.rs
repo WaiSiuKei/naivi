@@ -536,7 +536,12 @@ impl BaseDocument {
                 self.native_edit_value_changed(node_id, value, true);
             }
             NativeEditEvent::Submit { .. } => {
-                self.end_native_edit_session();
+                // Enter on a single-line control (browser parity): run
+                // implicit form submission but KEEP the session alive — a
+                // browser keeps the input focused and visible after Enter, so
+                // the guest can keep typing (its `@keyup.enter` handler may
+                // clear the value, which R5 pushes back into the native
+                // control). The session still ends on blur/focus move/Tab.
                 implicit_form_submission(self, node_id);
             }
             NativeEditEvent::Tab { shift, .. } => {

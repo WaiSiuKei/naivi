@@ -34,10 +34,14 @@ typedef struct {
     key_fn on_key_up;
 } NativeInputHandle;
 
-// AppKit uses a bottom-left origin; blitz reports top-left window coordinates,
-// so the y is flipped by the parent view's height.
+// AppKit views default to a bottom-left origin, but winit's `WinitView` is
+// flipped (`isFlipped == YES`, top-left origin) — which already matches
+// blitz's top-left viewport coordinates. Flip only for a non-flipped parent.
 static double flip_y(NativeInputHandle *h, double y, double height) {
     double parent_h = h->parent != nil ? h->parent.bounds.size.height : 0.0;
+    if (h->parent.isFlipped) {
+        return y;
+    }
     return parent_h - y - height;
 }
 
@@ -122,7 +126,8 @@ static BOOL key_for_selector(SEL commandSelector, const char **key, const char *
     }
     if (commandSelector == @selector(insertNewline:) && !h->multiline) {
         // Mirror the wasm backend: forward the full key sequence before
-        // `Submit` ends the session so the guest's `@keyup.enter` fires (KTD8).
+        // `Submit` so the guest's `@keyup.enter` fires (KTD8). The session
+        // stays alive after Submit (browser parity) — it ends on blur.
         if (h->on_key_down) h->on_key_down(h->ctx, h->node_id, "Enter", "Enter");
         if (h->on_key_up) h->on_key_up(h->ctx, h->node_id, "Enter", "Enter");
         if (h->on_submit) h->on_submit(h->ctx, h->node_id);
@@ -148,6 +153,81 @@ static BOOL key_for_selector(SEL commandSelector, const char **key, const char *
     return [self handleCommandSelector:commandSelector];
 }
 
+@end
+
+// ---------------------------------------------------------------------------
+// Vertically centered single-line cells
+// ---------------------------------------------------------------------------
+// A browser `<input>` centers its text vertically in the content box; a plain
+// NSTextField draws a single line at the TOP when the field is taller than the
+// line. These cells inset the drawing/editing rect to one line, centered
+// vertically, so the native overlay matches the DOM box (textareas keep their
+// natural top-left text flow).
+static NSRect centeredLineRect(NSRect rect, NSFont *font) {
+    NSFont *f = font != nil ? font : [NSFont systemFontOfSize:13.0];
+    CGFloat line = ceilf(f.ascender - f.descender); // full single-line height
+    if (rect.size.height > line) {
+        rect.origin.y += (rect.size.height - line) / 2.0;
+        rect.size.height = line;
+    }
+    return rect;
+}
+
+@interface VerticallyCenteredTextFieldCell : NSTextFieldCell
+@property(nonatomic) CGFloat padTop;
+@property(nonatomic) CGFloat padRight;
+@property(nonatomic) CGFloat padBottom;
+@property(nonatomic) CGFloat padLeft;
+@end
+
+@interface VerticallyCenteredSecureTextFieldCell : NSSecureTextFieldCell
+@property(nonatomic) CGFloat padTop;
+@property(nonatomic) CGFloat padRight;
+@property(nonatomic) CGFloat padBottom;
+@property(nonatomic) CGFloat padLeft;
+@end
+
+@implementation VerticallyCenteredTextFieldCell
+- (NSRect)drawingRectForBounds:(NSRect)bounds {
+    // Inset by the CSS padding (content box inside the border box) then center
+    // the single line vertically in that content box. The field's own
+    // coordinates are bottom-left (AppKit default), so the top padding is
+    // removed via the rect height, the bottom via the origin.
+    NSRect rect = [super drawingRectForBounds:bounds];
+    rect.origin.x += self.padLeft;
+    rect.origin.y += self.padBottom;
+    rect.size.width -= self.padLeft + self.padRight;
+    rect.size.height -= self.padTop + self.padBottom;
+    return centeredLineRect(rect, self.font);
+}
+- (void)selectWithFrame:(NSRect)aRect inView:(NSView *)cv editor:(NSText *)textObj delegate:(id)anObject start:(NSInteger)selStart length:(NSInteger)selLength {
+    NSRect rect = [self drawingRectForBounds:aRect];
+    [super selectWithFrame:rect inView:cv editor:textObj delegate:anObject start:selStart length:selLength];
+}
+- (void)editWithFrame:(NSRect)aRect inView:(NSView *)cv editor:(NSText *)textObj delegate:(id)anObject event:(NSEvent *)theEvent {
+    NSRect rect = [self drawingRectForBounds:aRect];
+    [super editWithFrame:rect inView:cv editor:textObj delegate:anObject event:theEvent];
+}
+@end
+
+@implementation VerticallyCenteredSecureTextFieldCell
+- (NSRect)drawingRectForBounds:(NSRect)bounds {
+    // Same padding-then-center behavior as the plain cell (see above).
+    NSRect rect = [super drawingRectForBounds:bounds];
+    rect.origin.x += self.padLeft;
+    rect.origin.y += self.padBottom;
+    rect.size.width -= self.padLeft + self.padRight;
+    rect.size.height -= self.padTop + self.padBottom;
+    return centeredLineRect(rect, self.font);
+}
+- (void)selectWithFrame:(NSRect)aRect inView:(NSView *)cv editor:(NSText *)textObj delegate:(id)anObject start:(NSInteger)selStart length:(NSInteger)selLength {
+    NSRect rect = [self drawingRectForBounds:aRect];
+    [super selectWithFrame:rect inView:cv editor:textObj delegate:anObject start:selStart length:selLength];
+}
+- (void)editWithFrame:(NSRect)aRect inView:(NSView *)cv editor:(NSText *)textObj delegate:(id)anObject event:(NSEvent *)theEvent {
+    NSRect rect = [self drawingRectForBounds:aRect];
+    [super editWithFrame:rect inView:cv editor:textObj delegate:anObject event:theEvent];
+}
 @end
 
 // ---------------------------------------------------------------------------
@@ -194,8 +274,12 @@ void *native_input_create(void *nsViewPtr, double x, double y, double w, double 
                 NSTextField *field;
                 if (secure) {
                     field = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(x, fy, w, h)];
+                    // Replace the cell BEFORE the field properties below are
+                    // set, so they proxy onto the centered cell.
+                    field.cell = [[VerticallyCenteredSecureTextFieldCell alloc] init];
                 } else {
                     field = [[NSTextField alloc] initWithFrame:NSMakeRect(x, fy, w, h)];
+                    field.cell = [[VerticallyCenteredTextFieldCell alloc] init];
                 }
                 field.bezeled = NO;
                 field.bordered = NO;
@@ -335,29 +419,69 @@ void native_input_focus(void *handlePtr) {
     }
 }
 
+// CSS font-weight (100..900) → AppKit NSFontWeight (-0.8 .. 0.62).
+static CGFloat cssWeightToNSFontWeight(double cssWeight) {
+    switch ((int)lround(cssWeight / 100.0)) {
+        case 1: return NSFontWeightUltraLight;
+        case 2: return NSFontWeightThin;
+        case 3: return NSFontWeightLight;
+        case 5: return NSFontWeightMedium;
+        case 6: return NSFontWeightSemibold;
+        case 7: return NSFontWeightBold;
+        case 8: return NSFontWeightHeavy;
+        case 9: return NSFontWeightBlack;
+        default: return NSFontWeightRegular; // 400
+    }
+}
+
+// CSS family names that alias the platform UI font (browser behavior: these
+// resolve to the system font, so they win the stack and stop the walk).
+static BOOL isSystemFamily(NSString *lower) {
+    return [lower isEqualToString:@"-apple-system"] ||
+           [lower isEqualToString:@"system-ui"] ||
+           [lower isEqualToString:@"blinkmacsystemfont"];
+}
+
 void native_input_set_font(void *handlePtr, const char *family, double size, double weight) {
     if (handlePtr == NULL) return;
     @autoreleasepool {
         @try {
             NativeInputHandle *handle = (NativeInputHandle *)handlePtr;
-            NSFont *font = [NSFont systemFontOfSize:size > 0 ? size : 13.0];
+            double pt = size > 0 ? size : 13.0;
+            CGFloat nw = cssWeightToNSFontWeight(weight > 0 ? weight : 400.0);
+            NSFont *font = nil;
             if (family != NULL && strlen(family) > 0) {
-                // The CSS font stack is a comma-joined list ("Noto Sans, sans-serif");
-                // fontWithName: needs a single PostScript name, so take the first
-                // usable family (R12).
+                // The CSS font stack is a comma-joined list ("-apple-system,
+                // Helvetica Neue, ..."). fontWithName: needs a single PostScript
+                // name, so walk the stack and take the first usable family
+                // (R12); system aliases win immediately.
                 NSArray<NSString *> *parts = [[NSString stringWithUTF8String:family] componentsSeparatedByString:@","];
                 for (NSString *part in parts) {
                     NSString *trimmed = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
                     trimmed = [trimmed stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\"'"] ];
                     if (trimmed.length == 0) continue;
-                    if ([trimmed.lowercaseString isEqualToString:@"sans-serif"] ||
-                        [trimmed.lowercaseString isEqualToString:@"serif"] ||
-                        [trimmed.lowercaseString isEqualToString:@"monospace"] ||
-                        [trimmed.lowercaseString isEqualToString:@"cursive"] ||
-                        [trimmed.lowercaseString isEqualToString:@"fantasy"]) continue;
-                    NSFont *named = [NSFont fontWithName:trimmed size:size > 0 ? size : 13.0];
+                    NSString *lower = trimmed.lowercaseString;
+                    if ([lower isEqualToString:@"sans-serif"] ||
+                        [lower isEqualToString:@"serif"] ||
+                        [lower isEqualToString:@"monospace"] ||
+                        [lower isEqualToString:@"cursive"] ||
+                        [lower isEqualToString:@"fantasy"]) continue;
+                    if (isSystemFamily(lower)) break;
+                    NSFont *named = [NSFont fontWithName:trimmed size:pt];
                     if (named != nil) { font = named; break; }
                 }
+            }
+            if (font == nil) {
+                // Default stack (or only generics/system aliases): the weighted
+                // system font, matching blitz's resolution of the UI stack.
+                font = [NSFont systemFontOfSize:pt weight:nw];
+            } else {
+                // Apply the CSS weight onto the resolved named family via the
+                // descriptor's weight trait (best-effort font matching).
+                NSFontDescriptor *desc = [font fontDescriptor];
+                desc = [desc fontDescriptorByAddingAttributes:@{ NSFontWeightTrait: @(nw) }];
+                NSFont *weighted = [NSFont fontWithDescriptor:desc size:pt];
+                if (weighted != nil) font = weighted;
             }
             if (handle->multiline) {
                 handle->textView.font = font;
@@ -403,6 +527,33 @@ void native_input_set_background(void *handlePtr, double r, double g, double b, 
             }
         } @catch (NSException *e) {
             NSLog(@"native_input_set_background error: %@", e.reason);
+        }
+    }
+}
+
+void native_input_set_padding(void *handlePtr, double top, double right, double bottom, double left) {
+    if (handlePtr == NULL) return;
+    @autoreleasepool {
+        @try {
+            NativeInputHandle *handle = (NativeInputHandle *)handlePtr;
+            if (handle->multiline) {
+                // NSTextView's container inset is a single symmetric NSSize;
+                // use the left/top padding so textarea text starts inset.
+                handle->textView.textContainerInset = NSMakeSize(left, top);
+            } else {
+                NSTextField *field = (NSTextField *)handle->control;
+                VerticallyCenteredTextFieldCell *cell =
+                    (VerticallyCenteredTextFieldCell *)field.cell;
+                if ([cell isKindOfClass:[VerticallyCenteredTextFieldCell class]] ||
+                    [cell isKindOfClass:[VerticallyCenteredSecureTextFieldCell class]]) {
+                    cell.padTop = top;
+                    cell.padRight = right;
+                    cell.padBottom = bottom;
+                    cell.padLeft = left;
+                }
+            }
+        } @catch (NSException *e) {
+            NSLog(@"native_input_set_padding error: %@", e.reason);
         }
     }
 }

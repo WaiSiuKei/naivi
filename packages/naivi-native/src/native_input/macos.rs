@@ -44,6 +44,7 @@ unsafe extern "C" {
     fn native_input_set_font(handle: *mut c_void, family: *const c_char, size: f64, weight: f64);
     fn native_input_set_text_color(handle: *mut c_void, r: f64, g: f64, b: f64, a: f64);
     fn native_input_set_background(handle: *mut c_void, r: f64, g: f64, b: f64, a: f64);
+    fn native_input_set_padding(handle: *mut c_void, top: f64, right: f64, bottom: f64, left: f64);
     fn native_input_set_placeholder(handle: *mut c_void, text: *const c_char);
     fn native_input_set_editable(handle: *mut c_void, editable: i32, enabled: i32);
     fn native_input_set_callbacks(
@@ -281,6 +282,8 @@ impl NativeTextInput for MacOSNativeTextInput {
                 native_input_set_text_color(handle, r as f64, g as f64, b as f64, a as f64);
                 let (r, g, b, a) = style.background_color;
                 native_input_set_background(handle, r as f64, g as f64, b as f64, a as f64);
+                let (pt, pr, pb, pl) = style.padding;
+                native_input_set_padding(handle, pt as f64, pr as f64, pb as f64, pl as f64);
             }
         });
     }

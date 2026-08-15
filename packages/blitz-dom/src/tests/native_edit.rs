@@ -525,15 +525,17 @@ fn guest_value_set_syncs_last_value() {
 }
 
 #[test]
-fn submit_runs_implicit_form_submission_and_ends_session() {
+fn submit_runs_implicit_form_submission_and_keeps_session() {
     let (mut doc, shell, input, _input2, _div) = make_doc("text");
     doc.set_focus_to(input);
 
-    // No form owner in this doc: implicit submission is a safe no-op and the
-    // session still ends.
+    // No form owner in this doc: implicit submission is a safe no-op. Unlike
+    // a blur commit, Enter must NOT end the session — a browser keeps the
+    // input focused and visible so the guest can keep typing (its
+    // `@keyup.enter` handler runs on the forwarded KeyUp before Submit).
     doc.handle_native_edit_event(NativeEditEvent::Submit { node_id: input });
-    assert!(doc.native_edit_session.is_none());
-    assert!(shell.calls.lock().unwrap().contains(&"end".to_string()));
+    assert!(doc.native_edit_session.is_some());
+    assert!(!shell.calls.lock().unwrap().contains(&"end".to_string()));
 }
 
 #[test]
