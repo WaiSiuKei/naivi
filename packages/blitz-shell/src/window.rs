@@ -12,6 +12,7 @@ use blitz_traits::events::{
     BlitzPointerEvent, BlitzPointerId, BlitzWheelDelta, BlitzWheelEvent, MouseEventButton,
     MouseEventButtons, PointerCoords, PointerDetails, UiEvent,
 };
+use blitz_traits::native_input::NativeTextInput;
 use blitz_traits::shell::Viewport;
 use winit::dpi::{LogicalPosition, PhysicalInsets, PhysicalPosition};
 use winit::keyboard::PhysicalKey;
@@ -44,6 +45,12 @@ pub struct WindowConfig<Rend: WindowRenderer> {
     doc: Box<dyn Document>,
     pub(crate) attributes: WindowAttributes,
     renderer: Rend,
+    /// Host-provided factory that builds the platform native text-input
+    /// backend. Invoked from window construction, where the winit window
+    /// exists — the host never holds the window itself. Args:
+    /// `(window, shell_proxy, doc_id)`.
+    native_text_input_factory:
+        Option<Box<dyn Fn(Arc<dyn Window>, BlitzShellProxy, usize) -> Option<Arc<dyn NativeTextInput>>>>,
 }
 
 impl<Rend: WindowRenderer> WindowConfig<Rend> {
@@ -60,7 +67,22 @@ impl<Rend: WindowRenderer> WindowConfig<Rend> {
             doc,
             attributes,
             renderer,
+            native_text_input_factory: None,
         }
+    }
+
+    /// Register a factory that builds the platform native text-input backend
+    /// (e.g. DOM `<input>`/`<textarea>` on wasm, NSTextField/NSTextView on
+    /// macOS). The factory runs inside the shell's window construction with
+    /// the created window, the shell proxy, and the document id.
+    pub fn with_native_text_input(
+        mut self,
+        factory: Box<
+            dyn Fn(Arc<dyn Window>, BlitzShellProxy, usize) -> Option<Arc<dyn NativeTextInput>>,
+        >,
+    ) -> Self {
+        self.native_text_input_factory = Some(factory);
+        self
     }
 }
 
@@ -183,8 +205,16 @@ impl<Rend: WindowRenderer> View<Rend> {
         let color_scheme = theme_to_color_scheme(theme);
         let viewport = Viewport::new(size.width, size.height, scale, color_scheme);
 
-        // Create shell provider
-        let shell_provider = BlitzShellProvider::new(winit_window.clone(), proxy.clone());
+        // Create shell provider. The native text-input backend (if a factory
+        // was registered) is built here, where the winit window exists — the
+        // host never holds it. `doc_id` is captured so backend events route
+        // back to this window's document (KTD2).
+        let native_text_input = config
+            .native_text_input_factory
+            .as_ref()
+            .and_then(|f| f(winit_window.clone(), proxy.clone(), config.doc.id()));
+        let shell_provider =
+            BlitzShellProvider::new(winit_window.clone(), proxy.clone(), native_text_input);
 
         let mut doc = config.doc;
         let mut inner = doc.inner_mut();

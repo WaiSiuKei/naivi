@@ -3,6 +3,7 @@
 
 pub mod devtools;
 pub mod events;
+pub mod native_input;
 pub mod navigation;
 pub mod net;
 pub mod node_id;

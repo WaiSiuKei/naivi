@@ -1,5 +1,6 @@
 //! Abstraction over windowing / operating system ("shell") functionality
 
+use crate::native_input::{NativeEditAttrs, NativeEditGeometry, NativeEditStyle};
 use cursor_icon::CursorIcon;
 
 /// Type representing an error performing a clipboard operation
@@ -25,6 +26,40 @@ pub trait ShellProvider: Send + Sync + 'static {
         let _ = width;
         let _ = height;
     }
+
+    // Native-edit session (engine-owned; hosts that implement a
+    // [`NativeTextInput`](crate::native_input::NativeTextInput) backend return
+    // `true` from `native_edit_capable`). Defaults are no-ops so hosts without
+    // a backend keep the canvas (parley) editing path unchanged.
+
+    /// Whether this shell hosts a native text-input backend.
+    fn native_edit_capable(&self) -> bool {
+        false
+    }
+
+    /// Begin a native-edit session for a focused element. Returns whether the
+    /// control was created (fail-close: a `false` keeps the parley path).
+    fn begin_native_edit_session(
+        &self,
+        _geometry: &NativeEditGeometry,
+        _style: &NativeEditStyle,
+        _attrs: &NativeEditAttrs,
+    ) -> bool {
+        false
+    }
+
+    /// Push a programmatic value into the active native control (R5).
+    fn native_edit_set_value(&self, _value: &str) {}
+
+    /// Reposition the active native control (R10).
+    fn update_native_edit_geometry(&self, _geometry: &NativeEditGeometry) {}
+
+    /// Restyle the active native control (R12).
+    fn update_native_edit_style(&self, _style: &NativeEditStyle) {}
+
+    /// End the native-edit session and hide/destroy the control (R3).
+    fn end_native_edit_session(&self) {}
+
     fn get_clipboard_text(&self) -> Result<String, ClipboardError> {
         Err(ClipboardError)
     }
@@ -64,6 +99,30 @@ pub trait ShellProvider: Send + Sync + 'static {
 
 pub struct DummyShellProvider;
 impl ShellProvider for DummyShellProvider {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native_input::{NativeEditAttrs, NativeEditGeometry, NativeEditStyle};
+
+    /// Hosts without a native text-input backend must be unaffected: the
+    /// session capability is off and every `native_edit_*` call is a safe no-op
+    /// (U1 default-no-op scenario).
+    #[test]
+    fn default_shell_provider_has_no_native_edit_capability() {
+        let provider = DummyShellProvider;
+        assert!(!provider.native_edit_capable());
+        assert!(!provider.begin_native_edit_session(
+            &NativeEditGeometry::default(),
+            &NativeEditStyle::default(),
+            &NativeEditAttrs::default(),
+        ));
+        provider.native_edit_set_value("x");
+        provider.update_native_edit_geometry(&NativeEditGeometry::default());
+        provider.update_native_edit_style(&NativeEditStyle::default());
+        provider.end_native_edit_session();
+    }
+}
 
 /// The system color scheme (light and dark mode)
 #[derive(Default, Debug, Clone, Copy, PartialEq)]

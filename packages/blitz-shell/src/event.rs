@@ -1,4 +1,5 @@
 use blitz_traits::navigation::NavigationOptions;
+use blitz_traits::native_input::NativeEditEvent;
 use blitz_traits::net::NetWaker;
 use futures_util::task::ArcWake;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -23,6 +24,14 @@ pub enum BlitzShellEvent {
 
     RequestRedraw {
         doc_id: usize,
+    },
+
+    /// A native text-input backend event (value change, composition, key
+    /// forwarding) during a native-edit session. Routed to the window whose
+    /// document id matches (KTD2).
+    NativeEdit {
+        doc_id: usize,
+        event: NativeEditEvent,
     },
 
     /// Close a window programmatically (e.g. a custom titlebar close button).

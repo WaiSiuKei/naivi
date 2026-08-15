@@ -73,6 +73,11 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
                     window.request_redraw();
                 }
             }
+            BlitzShellEvent::NativeEdit { doc_id, event } => {
+                if let Some(window) = self.window_mut_by_doc_id(doc_id) {
+                    window.doc.handle_native_edit_event(event);
+                }
+            }
 
             #[cfg(feature = "accessibility")]
             BlitzShellEvent::Accessibility { window_id, data } => {

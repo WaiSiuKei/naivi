@@ -37,6 +37,7 @@ pub use crate::net::DataUriNetProvider;
     )
 ))]
 use blitz_traits::shell::FileDialogFilter;
+use blitz_traits::native_input::{NativeEditAttrs, NativeEditGeometry, NativeEditStyle, NativeTextInput};
 use blitz_traits::shell::ShellProvider;
 use std::sync::Arc;
 use winit::cursor::{Cursor, CursorIcon};
@@ -87,10 +88,19 @@ pub fn current_android_app() -> android_activity::AndroidApp {
 pub struct BlitzShellProvider {
     window: Arc<dyn Window>,
     proxy: BlitzShellProxy,
+    native_text_input: Option<Arc<dyn NativeTextInput>>,
 }
 impl BlitzShellProvider {
-    pub fn new(window: Arc<dyn Window>, proxy: BlitzShellProxy) -> Self {
-        Self { window, proxy }
+    pub fn new(
+        window: Arc<dyn Window>,
+        proxy: BlitzShellProxy,
+        native_text_input: Option<Arc<dyn NativeTextInput>>,
+    ) -> Self {
+        Self {
+            window,
+            proxy,
+            native_text_input,
+        }
     }
 }
 
@@ -129,6 +139,41 @@ impl ShellProvider for BlitzShellProvider {
                 LogicalSize::new(width, height).into(),
             ),
         ));
+    }
+
+    fn native_edit_capable(&self) -> bool {
+        self.native_text_input.is_some()
+    }
+    fn begin_native_edit_session(
+        &self,
+        geometry: &NativeEditGeometry,
+        style: &NativeEditStyle,
+        attrs: &NativeEditAttrs,
+    ) -> bool {
+        match &self.native_text_input {
+            Some(backend) => backend.create(geometry, style, attrs),
+            None => false,
+        }
+    }
+    fn native_edit_set_value(&self, value: &str) {
+        if let Some(backend) = &self.native_text_input {
+            backend.set_value(value);
+        }
+    }
+    fn update_native_edit_geometry(&self, geometry: &NativeEditGeometry) {
+        if let Some(backend) = &self.native_text_input {
+            backend.update_bounds(geometry);
+        }
+    }
+    fn update_native_edit_style(&self, style: &NativeEditStyle) {
+        if let Some(backend) = &self.native_text_input {
+            backend.set_styles(style);
+        }
+    }
+    fn end_native_edit_session(&self) {
+        if let Some(backend) = &self.native_text_input {
+            backend.destroy();
+        }
     }
 
     fn request_window_close(&self) {

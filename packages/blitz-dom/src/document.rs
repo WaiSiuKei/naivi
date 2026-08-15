@@ -20,6 +20,7 @@ use crate::{
 };
 use blitz_traits::devtools::DevtoolSettings;
 use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData, HitResult, UiEvent};
+use blitz_traits::native_input::NativeEditEvent;
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
 use blitz_traits::net::{AbortSignal, Bytes, DummyNetProvider, NetProvider, Request};
 use blitz_traits::node_id::NodeId;
@@ -134,6 +135,15 @@ pub trait Document: Any + 'static {
         let mut doc = self.inner_mut();
         let mut driver = EventDriver::new(&mut *doc, NoopEventHandler);
         driver.handle_ui_event(event);
+    }
+
+    /// Handle a native text-input backend event (value change, composition,
+    /// key forwarding) during a native-edit session. The default forwards to
+    /// the inner [`BaseDocument`], mirroring the `handle_ui_event` default, so
+    /// host wrappers (`DocHandle`) reach the session logic without per-host
+    /// overrides.
+    fn handle_native_edit_event(&mut self, event: NativeEditEvent) {
+        self.inner_mut().handle_native_edit_event(event);
     }
 
     /// Poll any pending async operations, and flush changes to the underlying [`BaseDocument`]
@@ -428,6 +438,12 @@ pub(crate) fn make_device(
 }
 
 impl BaseDocument {
+    /// Handle a native text-input backend event during a native-edit session.
+    ///
+    /// U1 ships this as a no-op stub; U2 implements the session state machine
+    /// (value mirroring, key/composition forwarding, stale-event guard).
+    pub fn handle_native_edit_event(&mut self, _event: NativeEditEvent) {}
+
     /// Create a new (empty) [`BaseDocument`] with the specified configuration
     pub fn new(config: DocumentConfig) -> Self {
         static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
