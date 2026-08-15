@@ -8,11 +8,11 @@
 //! `native_edit_*` methods; the backend reports user edits back through
 //! [`NativeEditEvent`].
 
+use crate::node_id::NodeId;
 use keyboard_types::{Code, Key};
-use std::sync::Arc;
 
 /// Viewport-coordinate geometry of the element being natively edited.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NativeEditGeometry {
     /// Content box `(x, y, width, height)` in viewport (CSS px) coordinates.
     pub content_box: (f32, f32, f32, f32),
@@ -22,7 +22,7 @@ pub struct NativeEditGeometry {
 }
 
 /// Computed style payload for deep style matching (R12).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct NativeEditStyle {
     /// CSS font family string (may be a stack, e.g. `"Noto Sans", sans-serif`).
     pub font_family: String,
@@ -67,25 +67,54 @@ pub struct NativeEditAttrs {
 }
 
 /// Events the native control reports back to the engine during a session.
+///
+/// Every event carries the `node_id` the engine bound at [`NativeTextInput::create`]
+/// so the engine's stale-event guard can reject events emitted by a previous
+/// session's control (KTD2) — without it, a teardown `Committed` from control A
+/// delivered after session B started would be applied to B.
 #[derive(Debug, Clone)]
 pub enum NativeEditEvent {
     /// The user edited the text; carries the full current value.
-    ValueChanged(String),
+    ValueChanged { node_id: NodeId, value: String },
     /// The control lost focus (or committed); carries the final value.
-    Committed(String),
+    Committed { node_id: NodeId, value: String },
     /// Enter on a single-line control (form submission trigger).
-    Submit,
+    Submit { node_id: NodeId },
     /// Tab / Shift+Tab pressed inside the control.
-    Tab { shift: bool },
+    Tab { node_id: NodeId, shift: bool },
     /// A generic key press inside the control (forwarded to the guest; the
     /// engine keeps it out of the parley editor, KTD8).
-    KeyDown { key: Key, code: Code },
+    KeyDown {
+        node_id: NodeId,
+        key: Key,
+        code: Code,
+    },
     /// A generic key release inside the control (KTD8).
-    KeyUp { key: Key, code: Code },
+    KeyUp {
+        node_id: NodeId,
+        key: Key,
+        code: Code,
+    },
     /// IME composition preedit (marked text) from the native control.
-    CompositionPreedit(String),
+    CompositionPreedit { node_id: NodeId, text: String },
     /// IME composition commit from the native control.
-    CompositionCommit(String),
+    CompositionCommit { node_id: NodeId, text: String },
+}
+
+impl NativeEditEvent {
+    /// The node the emitting control was bound to at session start (KTD2).
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            NativeEditEvent::ValueChanged { node_id, .. }
+            | NativeEditEvent::Committed { node_id, .. }
+            | NativeEditEvent::Submit { node_id }
+            | NativeEditEvent::Tab { node_id, .. }
+            | NativeEditEvent::KeyDown { node_id, .. }
+            | NativeEditEvent::KeyUp { node_id, .. }
+            | NativeEditEvent::CompositionPreedit { node_id, .. }
+            | NativeEditEvent::CompositionCommit { node_id, .. } => *node_id,
+        }
+    }
 }
 
 /// A platform-native text input control, owned by the shell and driven by the
@@ -97,8 +126,11 @@ pub trait NativeTextInput: Send + Sync + 'static {
     /// Create (or show and position) the control over the given geometry,
     /// styled from `style` and reflecting `attrs`. Returns whether the control
     /// is now active — a `false` lets the engine fail-close to the parley path.
+    /// `node_id` is bound to the control and echoed back in every
+    /// [`NativeEditEvent`] so the engine can attribute events to this session.
     fn create(
         &self,
+        node_id: NodeId,
         geometry: &NativeEditGeometry,
         style: &NativeEditStyle,
         attrs: &NativeEditAttrs,
@@ -120,7 +152,3 @@ pub trait NativeTextInput: Send + Sync + 'static {
     /// Restyle the control (R12).
     fn set_styles(&self, style: &NativeEditStyle);
 }
-
-/// Convenience: an event sink the shell installs on a backend so it can send
-/// [`NativeEditEvent`]s without depending on the shell crate.
-pub type NativeEditSink = Arc<dyn Fn(NativeEditEvent) + Send + Sync>;

@@ -522,6 +522,19 @@ impl Node {
             .is_some()
     }
 
+    /// The element's content box in viewport (CSS px) coordinates
+    /// `(x, y, width, height)`: the absolutely-positioned origin plus the
+    /// layout content box. Shared by the IME cursor-area call and the
+    /// native-edit geometry extraction.
+    pub fn content_box_in_viewport(&self) -> (f32, f32, f32, f32) {
+        let mut pos = self.absolute_position(0.0, 0.0);
+        pos.x += self.final_layout().content_box_x();
+        pos.y += self.final_layout().content_box_y();
+        let width = self.final_layout().content_box_width();
+        let height = self.final_layout().content_box_height();
+        (pos.x, pos.y, width, height)
+    }
+
     pub fn focus(&mut self, shell_provider: Arc<dyn ShellProvider>, enable_ime: bool) {
         if let Some(data) = self.element_data_mut() {
             data.element_state
@@ -532,19 +545,10 @@ impl Node {
         // If focussing a text input, enable IME and set IME area. When a
         // native-edit session owns editing, the native control handles IME, so
         // the winit IME enable/area calls are skipped (KTD5, R2).
-        if enable_ime
-            && self
-                .element_data()
-                .and_then(|elem| elem.text_input_data())
-                .is_some()
-        {
+        if enable_ime && self.is_native_editable() {
             shell_provider.set_ime_enabled(true);
-            let mut pos = self.absolute_position(0.0, 0.0);
-            pos.x += self.final_layout().content_box_x();
-            pos.y += self.final_layout().content_box_y();
-            let width = self.final_layout().content_box_width();
-            let height = self.final_layout().content_box_height();
-            shell_provider.set_ime_cursor_area(pos.x, pos.y, width, height);
+            let (x, y, width, height) = self.content_box_in_viewport();
+            shell_provider.set_ime_cursor_area(x, y, width, height);
         }
     }
 
@@ -556,11 +560,7 @@ impl Node {
         self.set_restyle_hint(RestyleHint::restyle_subtree());
 
         // If blurring a text input, disable IME
-        if self
-            .element_data()
-            .and_then(|elem| elem.text_input_data())
-            .is_some()
-        {
+        if self.is_native_editable() {
             shell_provider.set_ime_enabled(false);
         }
     }

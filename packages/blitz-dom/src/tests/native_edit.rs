@@ -2,7 +2,7 @@
 //! lifecycle on focus/blur, bidirectional value sync, key/composition
 //! forwarding, Tab traversal, stale-event guard, fail-close, and coverage.
 
-use crate::{Attribute, BaseDocument, DocumentConfig, NodeId, qual_name};
+use crate::{Attribute, BaseDocument, Document, DocumentConfig, NodeId, qual_name};
 use blitz_traits::native_input::{
     NativeEditAttrs, NativeEditEvent, NativeEditGeometry, NativeEditStyle,
 };
@@ -35,6 +35,7 @@ impl ShellProvider for MockNativeShell {
     }
     fn begin_native_edit_session(
         &self,
+        _node_id: NodeId,
         _geometry: &NativeEditGeometry,
         _style: &NativeEditStyle,
         _attrs: &NativeEditAttrs,
@@ -48,8 +49,17 @@ impl ShellProvider for MockNativeShell {
     fn update_native_edit_geometry(&self, _geometry: &NativeEditGeometry) {
         self.calls.lock().unwrap().push("update_geometry".to_string());
     }
+    fn update_native_edit_style(&self, _style: &NativeEditStyle) {
+        self.calls.lock().unwrap().push("update_style".to_string());
+    }
     fn end_native_edit_session(&self) {
         self.calls.lock().unwrap().push("end".to_string());
+    }
+    fn set_ime_enabled(&self, _enabled: bool) {
+        self.calls.lock().unwrap().push("ime_enabled".to_string());
+    }
+    fn set_ime_cursor_area(&self, _x: f32, _y: f32, _width: f32, _height: f32) {
+        self.calls.lock().unwrap().push("ime_area".to_string());
     }
 }
 
@@ -120,7 +130,10 @@ fn value_changed_mirrors_into_dom_and_dispatches_input() {
     let (mut doc, shell, input, _input2, _div) = make_doc("text");
     doc.set_focus_to(input);
 
-    doc.handle_native_edit_event(NativeEditEvent::ValueChanged("hi".to_string()));
+    doc.handle_native_edit_event(NativeEditEvent::ValueChanged {
+        node_id: input,
+        value: "hi".to_string(),
+    });
 
     let session = doc.native_edit_session.clone().unwrap();
     assert_eq!(session.last_value, "hi");
@@ -168,7 +181,10 @@ fn tab_traversal_ends_old_session_and_starts_next() {
     doc.set_focus_to(input);
     assert!(doc.native_edit_session.is_some());
 
-    doc.handle_native_edit_event(NativeEditEvent::Tab { shift: false });
+    doc.handle_native_edit_event(NativeEditEvent::Tab {
+        node_id: input,
+        shift: false,
+    });
 
     // First session ended, a new one started on the second covered input.
     let session = doc.native_edit_session.clone().expect("new session started");
@@ -184,6 +200,7 @@ fn key_events_reach_guest_queue_handler_only() {
     doc.set_focus_to(input);
 
     doc.handle_native_edit_event(NativeEditEvent::KeyUp {
+        node_id: input,
         key: keyboard_types::Key::Enter,
         code: keyboard_types::Code::Enter,
     });
@@ -196,19 +213,22 @@ fn key_events_reach_guest_queue_handler_only() {
 }
 
 #[test]
-fn composition_commit_reaches_guest_without_parley_edit() {
+fn keydown_reaches_guest_queue_handler_only() {
     let (mut doc, _shell, input, _input2, _div) = make_doc("text");
     doc.set_focus_to(input);
 
-    doc.handle_native_edit_event(NativeEditEvent::CompositionCommit("中".to_string()));
+    doc.handle_native_edit_event(NativeEditEvent::KeyDown {
+        node_id: input,
+        key: keyboard_types::Key::Character("a".into()),
+        code: keyboard_types::Code::KeyA,
+    });
 
     let pending = doc.drain_native_edit_events();
     assert!(matches!(
         pending[0].data,
-        blitz_traits::events::DomEventData::Ime(blitz_traits::events::BlitzImeEvent::Commit(ref t))
-            if t == "中"
+        blitz_traits::events::DomEventData::KeyDown(_)
     ));
-    // Parley editor text is untouched (guest-only dispatch).
+    // The parley editor is untouched (guest-only dispatch, KTD8).
     let editor_text = doc
         .get_node(input)
         .and_then(|n| n.element_data())
@@ -218,11 +238,96 @@ fn composition_commit_reaches_guest_without_parley_edit() {
 }
 
 #[test]
+fn driver_suppresses_winit_keys_for_session_element() {
+    // R2/KTD8: while a native-edit session is active, winit key events for the
+    // session element must not reach the parley editor (they arrive via
+    // `NativeEditEvent` instead) — the authoritative double-input guard.
+    let key_event = blitz_traits::events::BlitzKeyEvent {
+        key: keyboard_types::Key::Character("x".into()),
+        code: keyboard_types::Code::KeyX,
+        modifiers: Default::default(),
+        location: Default::default(),
+        is_auto_repeating: false,
+        is_composing: false,
+        state: blitz_traits::events::KeyState::Pressed,
+        text: Some("x".into()),
+    };
+    let (mut doc, _shell, input, _input2, _div) = make_doc("text");
+    doc.set_focus_to(input);
+    assert!(doc.native_edit_session.is_some());
+
+    doc.handle_ui_event(blitz_traits::events::UiEvent::KeyDown(key_event.clone()));
+    let editor_text = doc
+        .get_node(input)
+        .and_then(|n| n.element_data())
+        .and_then(|e| e.text_input_data())
+        .map(|d| d.editor.raw_text().to_string());
+    assert_eq!(
+        editor_text.as_deref(),
+        Some(""),
+        "winit keys must not feed the parley editor during a session"
+    );
+
+    // Without a session the same key would edit the parley text.
+    doc.end_native_edit_session();
+    Document::handle_ui_event(&mut doc, blitz_traits::events::UiEvent::KeyDown(key_event));
+    let editor_text = doc
+        .get_node(input)
+        .and_then(|n| n.element_data())
+        .and_then(|e| e.text_input_data())
+        .map(|d| d.editor.raw_text().to_string());
+    assert_eq!(editor_text.as_deref(), Some("x"));
+}
+
+#[test]
+fn composition_commit_reaches_guest_without_parley_edit() {
+    let (mut doc, _shell, input, _input2, _div) = make_doc("text");
+    doc.set_focus_to(input);
+
+    doc.handle_native_edit_event(NativeEditEvent::CompositionCommit {
+        node_id: input,
+        text: "中".to_string(),
+    });
+
+    let pending = doc.drain_native_edit_events();
+    // Browser order: Ime Commit first, then the mirrored Input.
+    assert!(matches!(
+        pending[0].data,
+        blitz_traits::events::DomEventData::Ime(blitz_traits::events::BlitzImeEvent::Commit(ref t))
+            if t == "中"
+    ));
+    assert!(matches!(
+        pending[1].data,
+        blitz_traits::events::DomEventData::Input(ref e) if e.value == "中"
+    ));
+    // The committed text is mirrored into the value attribute (R4/R8), which
+    // also syncs the parley editor text (the mirror path — not a double insert).
+    let attr_value = doc
+        .get_node(input)
+        .and_then(|n| n.element_data())
+        .and_then(|e| e.attr(markup5ever::local_name!("value")))
+        .unwrap()
+        .to_string();
+    assert_eq!(attr_value, "中");
+    // Parley editor mirrors the value exactly once (no double text from the
+    // IME path — the Ime event was guest-only).
+    let editor_text = doc
+        .get_node(input)
+        .and_then(|n| n.element_data())
+        .and_then(|e| e.text_input_data())
+        .map(|d| d.editor.raw_text().to_string());
+    assert_eq!(editor_text.as_deref(), Some("中"));
+}
+
+#[test]
 fn committed_mirrors_value_then_ends_session() {
     let (mut doc, shell, input, _input2, _div) = make_doc("text");
     doc.set_focus_to(input);
 
-    doc.handle_native_edit_event(NativeEditEvent::Committed("final".to_string()));
+    doc.handle_native_edit_event(NativeEditEvent::Committed {
+        node_id: input,
+        value: "final".to_string(),
+    });
 
     assert!(doc.native_edit_session.is_none());
     assert!(shell.calls.lock().unwrap().contains(&"end".to_string()));
@@ -243,10 +348,53 @@ fn stale_events_are_dropped_after_session_end() {
     assert!(doc.native_edit_session.is_none());
 
     // A queued backend event arriving after the session ended is dropped.
-    doc.handle_native_edit_event(NativeEditEvent::Committed("late".to_string()));
+    doc.handle_native_edit_event(NativeEditEvent::Committed {
+        node_id: input,
+        value: "late".to_string(),
+    });
     assert!(doc.native_edit_pending_events.is_empty());
     // Idempotent end is safe.
     doc.end_native_edit_session();
+}
+
+#[test]
+fn stale_event_from_previous_session_node_is_dropped() {
+    // F1: a backend `Committed` from a PREVIOUS session's control (delivered
+    // asynchronously after the next session started, e.g. the old overlay's
+    // teardown blur) must not be applied to the new session's element. This is
+    // the source-blind stale-guard regression: the event carries the previous
+    // node's id and is rejected even though a session is active.
+    let (mut doc, shell, input, input2, _div) = make_doc("text");
+    doc.set_focus_to(input);
+    // Move focus to the second covered input: session A ends, session B starts.
+    doc.set_focus_to(input2);
+    let session_b = doc.native_edit_session.clone().unwrap();
+    assert_eq!(session_b.node_id, input2);
+
+    // A late teardown event from input (node A) arrives now.
+    doc.handle_native_edit_event(NativeEditEvent::Committed {
+        node_id: input,
+        value: String::new(),
+    });
+
+    // Session B is untouched: still active, value attribute unmodified.
+    assert!(doc.native_edit_session.is_some());
+    assert_eq!(doc.native_edit_session.as_ref().unwrap().node_id, input2);
+    let attr_value = doc
+        .get_node(input2)
+        .and_then(|n| n.element_data())
+        .and_then(|e| e.attr(markup5ever::local_name!("value")))
+        .map(|v| v.to_string());
+    assert_eq!(attr_value, None, "B's value attribute must be untouched");
+    // No spurious input dispatched for B.
+    assert!(doc.native_edit_pending_events.is_empty());
+    // Session B still ends on a genuine commit for its own node.
+    doc.handle_native_edit_event(NativeEditEvent::Committed {
+        node_id: input2,
+        value: "done".to_string(),
+    });
+    assert!(doc.native_edit_session.is_none());
+    assert!(shell.calls.lock().unwrap().contains(&"end".to_string()));
 }
 
 #[test]
@@ -282,17 +430,41 @@ fn geometry_repush_only_when_box_changed() {
     doc.update_native_edit_session_geometry();
     assert_eq!(shell.calls.lock().unwrap().len(), before);
 
-    // Force a geometry change and re-push → update fired.
+    // Force a geometry change and re-push → update fired, style re-pushed
+    // alongside (R12, U2.8).
     {
         let mut session = doc.native_edit_session.as_mut().unwrap();
         session.geometry.border_box.2 += 10.0;
     }
     doc.update_native_edit_session_geometry();
-    assert!(shell
-        .calls
-        .lock()
-        .unwrap()
-        .contains(&"update_geometry".to_string()));
+    let calls = shell.calls.lock().unwrap();
+    assert!(calls.contains(&"update_geometry".to_string()));
+    assert!(
+        calls.contains(&"update_style".to_string()),
+        "style re-push (R12) must follow a box change"
+    );
+}
+
+#[test]
+fn guest_value_set_syncs_last_value() {
+    // F15: after the guest sets the value (R5 push), a later blur-commit of
+    // the SAME value must be recognized as a no-op — no spurious `input` for
+    // the guest's own text.
+    let (mut doc, shell, input, _input2, _div) = make_doc("text");
+    doc.set_focus_to(input);
+
+    let mut m = doc.mutate();
+    m.set_attribute(input, qual_name!("value", html), "ab");
+    drop(m);
+    assert!(shell.set_values.lock().unwrap().contains(&"ab".to_string()));
+
+    doc.handle_native_edit_event(NativeEditEvent::Committed {
+        node_id: input,
+        value: "ab".to_string(),
+    });
+    // Session ended; no input event dispatched for the guest's own value.
+    assert!(doc.native_edit_session.is_none());
+    assert!(doc.native_edit_pending_events.is_empty());
 }
 
 #[test]
@@ -302,7 +474,7 @@ fn submit_runs_implicit_form_submission_and_ends_session() {
 
     // No form owner in this doc: implicit submission is a safe no-op and the
     // session still ends.
-    doc.handle_native_edit_event(NativeEditEvent::Submit);
+    doc.handle_native_edit_event(NativeEditEvent::Submit { node_id: input });
     assert!(doc.native_edit_session.is_none());
     assert!(shell.calls.lock().unwrap().contains(&"end".to_string()));
 }
@@ -310,11 +482,16 @@ fn submit_runs_implicit_form_submission_and_ends_session() {
 #[test]
 fn focus_skip_ime_for_session_element() {
     // The covered input must not receive winit IME enable/area calls when the
-    // session owns editing. Pins that `focus()` was called with
-    // `enable_ime=false` (the session still starts, no panic).
-    let (mut doc, _shell, input, _input2, _div) = make_doc("text");
+    // session owns editing (KTD5/R2): the native control owns IME. Pins that
+    // `focus()` was called with `enable_ime=false` and no IME calls leaked.
+    let (mut doc, shell, input, _input2, _div) = make_doc("text");
     assert!(doc.set_focus_to(input));
     assert!(doc.native_edit_session.is_some());
+    let calls = shell.calls.lock().unwrap();
+    assert!(
+        !calls.iter().any(|c| c == "ime_enabled" || c == "ime_area"),
+        "IME must be owned by the native control, got {calls:?}"
+    );
 }
 
 #[test]

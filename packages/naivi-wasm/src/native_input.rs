@@ -17,6 +17,7 @@ use blitz_shell::BlitzShellProxy;
 use blitz_traits::native_input::{
     NativeEditAttrs, NativeEditEvent, NativeEditGeometry, NativeEditStyle, NativeTextInput,
 };
+use blitz_traits::node_id::NodeId;
 use keyboard_types::{Code, Key};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -34,6 +35,16 @@ struct WasmNativeDom {
     /// are suppressed so the guest does not receive both the preedit stream
     /// and intermediate values.
     is_composing: bool,
+    /// True while `destroy` runs: the overlay's synchronous blur (triggered by
+    /// hiding it / restoring canvas focus) must not emit a `Committed` for a
+    /// session the engine is already tearing down (the value is live-mirrored,
+    /// R4).
+    destroying: bool,
+    /// True right after `create` until the engine's seed `set_value` — the
+    /// seed places the caret at the end of the seeded text (plan U2.2).
+    pending_seed: bool,
+    /// The node this control is currently bound to (KTD2); echoed in events.
+    node_id: Option<NodeId>,
     /// Currently visible control (`true` = textarea).
     active_multiline: bool,
     /// Kept alive for the page lifetime (listeners are installed once).
@@ -80,6 +91,9 @@ pub fn init_dom(canvas: HtmlCanvasElement) {
             input: Some(input),
             textarea: Some(textarea),
             is_composing: false,
+            destroying: false,
+            pending_seed: false,
+            node_id: None,
             active_multiline: false,
             listeners: Vec::new(),
         };
@@ -135,6 +149,7 @@ fn current_value(multiline: bool) -> String {
 
 /// The `Send + Sync` backend handle: only the doc id + shell proxy (the DOM
 /// lives in the thread-local above).
+#[derive(Clone)]
 pub struct WasmNativeTextInput {
     doc_id: usize,
     proxy: BlitzShellProxy,
@@ -157,20 +172,21 @@ impl WasmNativeTextInput {
 impl NativeTextInput for WasmNativeTextInput {
     fn create(
         &self,
+        node_id: NodeId,
         geometry: &NativeEditGeometry,
         style: &NativeEditStyle,
         attrs: &NativeEditAttrs,
     ) -> bool {
         with_dom(|dom| {
             dom.is_composing = false;
+            dom.destroying = false;
+            dom.pending_seed = true;
+            dom.node_id = Some(node_id);
             dom.active_multiline = attrs.multiline;
             let element: web_sys::HtmlElement = if attrs.multiline {
-                let t = dom.textarea.as_ref().expect("no textarea");
-                let _ = t.set_value("");
-                t.clone().unchecked_into()
+                dom.textarea.as_ref().expect("no textarea").clone().unchecked_into()
             } else {
                 let i = dom.input.as_ref().expect("no input");
-                let _ = i.set_value("");
                 let _ = i.set_type(&attrs.input_type);
                 i.clone().unchecked_into()
             };
@@ -203,21 +219,32 @@ impl NativeTextInput for WasmNativeTextInput {
             apply_style(&element, style);
             position_element(&element, geometry, &dom.canvas);
 
-            // Show and focus.
+            // Show and focus. `element.focus()` can fail (hidden page,
+            // refused focus); fail-close to the parley path rather than
+            // reporting an active session with no keyboard path.
             let _ = element.style().set_property("display", "block");
-            let _ = element.focus();
-            true
+            element.focus().is_ok()
         })
         .unwrap_or(false)
     }
 
     fn destroy(&self) {
         with_dom(|dom| {
+            // The overlay is about to lose focus (hide + canvas focus).
+            // Suppress the resulting blur `Committed` — the session is already
+            // ending and the value was live-mirrored (R4).
+            dom.destroying = true;
+            dom.pending_seed = false;
+            dom.node_id = None;
             let element: Option<web_sys::HtmlElement> = if dom.active_multiline {
                 dom.textarea.clone().map(|t| t.unchecked_into())
             } else {
                 dom.input.clone().map(|i| i.unchecked_into())
             };
+            // Capture whether the overlay holds focus BEFORE hiding it —
+            // `display:none` synchronously blurs the focused element, so the
+            // check must run first to restore canvas focus afterwards.
+            let overlay_active = document_active_element_is_overlay(dom);
             if let Some(element) = element {
                 let _ = element.style().set_property("display", "none");
             }
@@ -225,42 +252,32 @@ impl NativeTextInput for WasmNativeTextInput {
 
             // Restore DOM focus to the canvas when the overlay held it, so
             // winit's canvas key listeners keep receiving events (A4).
-            let document = web_sys::window().and_then(|w| w.document());
-            if let Some(active) = document.and_then(|d| d.active_element()) {
-                let overlay_active = dom
-                    .input
-                    .clone()
-                    .map(|i| i.unchecked_into::<web_sys::Element>())
-                    .or_else(|| dom.textarea.clone().map(|t| t.unchecked_into()))
-                    .is_some_and(|el| el == active);
-                if overlay_active {
-                    let _ = dom.canvas.focus();
-                }
+            if overlay_active {
+                let _ = dom.canvas.focus();
             }
         });
     }
 
     fn set_value(&self, value: &str) {
         with_dom(|dom| {
-            if dom.active_multiline {
-                if let Some(t) = dom.textarea.as_ref() {
-                    set_textarea_preserving_selection(t, value);
-                }
-            } else if let Some(i) = dom.input.as_ref() {
-                set_input_preserving_selection(i, value);
+            let element: Option<&dyn SelectionValue> = if dom.active_multiline {
+                dom.textarea.as_ref().map(|t| t as &dyn SelectionValue)
+            } else {
+                dom.input.as_ref().map(|i| i as &dyn SelectionValue)
+            };
+            if let Some(element) = element {
+                // The engine's seed after `create` places the caret at the
+                // end of the seeded text (plan U2.2, "otherwise end-of-value")
+                // instead of pinning it at 0; later programmatic pushes (R5)
+                // preserve the user's selection.
+                let seed = std::mem::take(&mut dom.pending_seed);
+                set_preserving_selection(element, value, seed);
             }
         });
     }
 
     fn get_value(&self) -> String {
-        with_dom(|dom| {
-            if dom.active_multiline {
-                dom.textarea.as_ref().map(|t| t.value()).unwrap_or_default()
-            } else {
-                dom.input.as_ref().map(|i| i.value()).unwrap_or_default()
-            }
-        })
-        .unwrap_or_default()
+        with_dom(|dom| current_value(dom.active_multiline)).unwrap_or_default()
     }
 
     fn update_bounds(&self, geometry: &NativeEditGeometry) {
@@ -354,27 +371,100 @@ fn apply_style(element: &web_sys::HtmlElement, style: &NativeEditStyle) {
     }
 }
 
-fn set_input_preserving_selection(input: &HtmlInputElement, value: &str) {
-    let start = input.selection_start().ok().flatten().unwrap_or(0);
-    let end = input.selection_end().ok().flatten().unwrap_or(0);
-    input.set_value(value);
-    let _ = input.set_selection_range(start, end);
+/// Common value/selection surface of `HtmlInputElement` and
+/// `HtmlTextAreaElement` (the two overlay controls).
+trait SelectionValue {
+    fn selection_start(&self) -> Result<Option<u32>, wasm_bindgen::JsValue>;
+    fn selection_end(&self) -> Result<Option<u32>, wasm_bindgen::JsValue>;
+    fn set_value(&self, value: &str);
+    fn set_selection_range(&self, start: u32, end: u32) -> Result<(), wasm_bindgen::JsValue>;
 }
 
-fn set_textarea_preserving_selection(textarea: &HtmlTextAreaElement, value: &str) {
-    let start = textarea.selection_start().ok().flatten().unwrap_or(0);
-    let end = textarea.selection_end().ok().flatten().unwrap_or(0);
-    textarea.set_value(value);
-    let _ = textarea.set_selection_range(start, end);
+impl SelectionValue for HtmlInputElement {
+    fn selection_start(&self) -> Result<Option<u32>, wasm_bindgen::JsValue> {
+        HtmlInputElement::selection_start(self)
+    }
+    fn selection_end(&self) -> Result<Option<u32>, wasm_bindgen::JsValue> {
+        HtmlInputElement::selection_end(self)
+    }
+    fn set_value(&self, value: &str) {
+        HtmlInputElement::set_value(self, value);
+    }
+    fn set_selection_range(&self, start: u32, end: u32) -> Result<(), wasm_bindgen::JsValue> {
+        HtmlInputElement::set_selection_range(self, start, end)
+    }
 }
 
-/// Send a native edit event to the shell. The engine drops stale events.
-fn send_native(event: NativeEditEvent) {
+impl SelectionValue for HtmlTextAreaElement {
+    fn selection_start(&self) -> Result<Option<u32>, wasm_bindgen::JsValue> {
+        HtmlTextAreaElement::selection_start(self)
+    }
+    fn selection_end(&self) -> Result<Option<u32>, wasm_bindgen::JsValue> {
+        HtmlTextAreaElement::selection_end(self)
+    }
+    fn set_value(&self, value: &str) {
+        HtmlTextAreaElement::set_value(self, value);
+    }
+    fn set_selection_range(&self, start: u32, end: u32) -> Result<(), wasm_bindgen::JsValue> {
+        HtmlTextAreaElement::set_selection_range(self, start, end)
+    }
+}
+
+/// Set a control's value while preserving the current caret/selection (R5).
+/// When `seed` is true (the engine's value seed right after `create`), place
+/// the caret at the end of the seeded text instead (plan U2.2).
+fn set_preserving_selection(element: &dyn SelectionValue, value: &str, seed: bool) {
+    if seed {
+        element.set_value(value);
+        let end = value.len() as u32;
+        let _ = element.set_selection_range(end, end);
+        return;
+    }
+    let start = element.selection_start().ok().flatten().unwrap_or(0);
+    let end = element.selection_end().ok().flatten().unwrap_or(0);
+    element.set_value(value);
+    let _ = element.set_selection_range(start, end);
+}
+
+/// The node the overlay is currently bound to (KTD2); `None` outside a session.
+fn current_node_id() -> Option<NodeId> {
+    with_dom(|dom| dom.node_id).flatten()
+}
+
+/// Whether either overlay control currently holds DOM focus (checked before
+/// the overlay is hidden in `destroy`).
+fn document_active_element_is_overlay(dom: &WasmNativeDom) -> bool {
+    let Some(active) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.active_element())
+    else {
+        return false;
+    };
+    dom.input
+        .clone()
+        .map(|i| i.unchecked_into::<web_sys::Element>())
+        .or_else(|| dom.textarea.clone().map(|t| t.unchecked_into()))
+        .is_some_and(|el| el == active)
+}
+
+/// Send a native edit event tagged with the session's node (KTD2). The engine
+/// drops stale events, including ones from a previous session's control.
+fn send_native<F: FnOnce(NodeId) -> NativeEditEvent>(build: F) {
+    let Some(node_id) = current_node_id() else {
+        return;
+    };
+    let event = build(node_id);
     BACKEND.with(|slot| {
         if let Some(backend) = slot.borrow().as_ref() {
             backend.send(event);
         }
     });
+}
+
+/// True while `destroy` is tearing the overlay down (the synchronous blur must
+/// not emit a `Committed` for the ending session).
+fn is_destroying() -> bool {
+    with_dom(|dom| dom.destroying).unwrap_or(false)
 }
 
 fn install_listeners(dom: &mut WasmNativeDom) {
@@ -389,7 +479,8 @@ fn install_listeners(dom: &mut WasmNativeDom) {
         // input → ValueChanged (skipped during IME composition)
         let oninput = Closure::wrap(Box::new(move || {
             if !is_composing() {
-                send_native(NativeEditEvent::ValueChanged(current_value(m)));
+                let value = current_value(m);
+                send_native(move |node_id| NativeEditEvent::ValueChanged { node_id, value });
             }
         }) as Box<dyn FnMut()>);
         let _ = element.add_event_listener_with_callback("input", oninput.as_ref().unchecked_ref());
@@ -398,36 +489,44 @@ fn install_listeners(dom: &mut WasmNativeDom) {
         // composition
         let on_start = Closure::wrap(Box::new(move || {
             set_composing(true);
-            send_native(NativeEditEvent::CompositionPreedit(String::new()));
+            send_native(|node_id| NativeEditEvent::CompositionPreedit {
+                node_id,
+                text: String::new(),
+            });
         }) as Box<dyn FnMut()>);
         let _ = element.add_event_listener_with_callback("compositionstart", on_start.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_start));
 
         let on_update = Closure::wrap(Box::new(move |ev: web_sys::CompositionEvent| {
-            send_native(NativeEditEvent::CompositionPreedit(
-                ev.data().unwrap_or_default(),
-            ));
+            let text = ev.data().unwrap_or_default();
+            send_native(move |node_id| NativeEditEvent::CompositionPreedit { node_id, text });
         }) as Box<dyn FnMut(_)>);
         let _ = element.add_event_listener_with_callback("compositionupdate", on_update.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_update));
 
         let on_end = Closure::wrap(Box::new(move |ev: web_sys::CompositionEvent| {
             set_composing(false);
-            send_native(NativeEditEvent::CompositionCommit(
-                ev.data().unwrap_or_default(),
-            ));
+            let text = ev.data().unwrap_or_default();
+            send_native(move |node_id| NativeEditEvent::CompositionCommit { node_id, text });
         }) as Box<dyn FnMut(_)>);
         let _ = element.add_event_listener_with_callback("compositionend", on_end.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_end));
 
-        // keydown → Tab/Submit/KeyDown; always stopPropagation (R2, KTD5)
+        // keydown → Tab/Submit/KeyDown; always stopPropagation (R2, KTD5).
+        // While the IME is composing, Enter/Tab confirm the candidate and must
+        // not trigger submit/traversal — the IME owns the key.
         let on_keydown = Closure::wrap(Box::new(move |ev: web_sys::KeyboardEvent| {
             let _ = ev.stop_propagation();
+            let composing = ev.is_composing();
             let key = ev.key();
             let code = ev.code();
+            if composing {
+                return;
+            }
             if key == "Tab" {
                 let _ = ev.prevent_default();
-                send_native(NativeEditEvent::Tab { shift: ev.shift_key() });
+                let shift = ev.shift_key();
+                send_native(move |node_id| NativeEditEvent::Tab { node_id, shift });
                 return;
             }
             if key == "Enter" && !m {
@@ -436,21 +535,22 @@ fn install_listeners(dom: &mut WasmNativeDom) {
                 // ends the session: the overlay is destroyed on submit, so a
                 // real `keyup` would be a stale event and the guest's
                 // `@keyup.enter` would never fire (KTD8).
-                send_native(NativeEditEvent::KeyDown {
+                send_native(|node_id| NativeEditEvent::KeyDown {
+                    node_id,
                     key: Key::Enter,
                     code: Code::Enter,
                 });
-                send_native(NativeEditEvent::KeyUp {
+                send_native(|node_id| NativeEditEvent::KeyUp {
+                    node_id,
                     key: Key::Enter,
                     code: Code::Enter,
                 });
-                send_native(NativeEditEvent::Submit);
+                send_native(|node_id| NativeEditEvent::Submit { node_id });
                 return;
             }
-            send_native(NativeEditEvent::KeyDown {
-                key: key.parse().unwrap_or(Key::Unidentified),
-                code: code.parse().unwrap_or(Code::Unidentified),
-            });
+            let key = key.parse().unwrap_or(Key::Unidentified);
+            let code = code.parse().unwrap_or(Code::Unidentified);
+            send_native(move |node_id| NativeEditEvent::KeyDown { node_id, key, code });
         }) as Box<dyn FnMut(_)>);
         let _ = element.add_event_listener_with_callback("keydown", on_keydown.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_keydown));
@@ -458,17 +558,21 @@ fn install_listeners(dom: &mut WasmNativeDom) {
         // keyup → KeyUp; stopPropagation
         let on_keyup = Closure::wrap(Box::new(move |ev: web_sys::KeyboardEvent| {
             let _ = ev.stop_propagation();
-            send_native(NativeEditEvent::KeyUp {
-                key: ev.key().parse().unwrap_or(Key::Unidentified),
-                code: ev.code().parse().unwrap_or(Code::Unidentified),
-            });
+            let key = ev.key().parse().unwrap_or(Key::Unidentified);
+            let code = ev.code().parse().unwrap_or(Code::Unidentified);
+            send_native(move |node_id| NativeEditEvent::KeyUp { node_id, key, code });
         }) as Box<dyn FnMut(_)>);
         let _ = element.add_event_listener_with_callback("keyup", on_keyup.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_keyup));
 
-        // blur → Committed (R6)
+        // blur → Committed (R6); suppressed while destroy tears the overlay
+        // down (the engine already ended the session and live-mirrored R4).
         let on_blur = Closure::wrap(Box::new(move || {
-            send_native(NativeEditEvent::Committed(current_value(m)));
+            if is_destroying() {
+                return;
+            }
+            let value = current_value(m);
+            send_native(move |node_id| NativeEditEvent::Committed { node_id, value });
         }) as Box<dyn FnMut()>);
         let _ = element.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref());
         dom.listeners.push(Rc::new(on_blur));

@@ -11,16 +11,19 @@ use blitz_shell::{BlitzShellEvent, BlitzShellProxy};
 use blitz_traits::native_input::{
     NativeEditAttrs, NativeEditEvent, NativeEditGeometry, NativeEditStyle, NativeTextInput,
 };
+use blitz_traits::node_id::NodeId;
+use keyboard_types::{Code, Key};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // FFI to the ObjC helper
 // ---------------------------------------------------------------------------
-type ValueChangedFn = unsafe extern "C" fn(*mut c_void, *const c_char);
-type CommittedFn = unsafe extern "C" fn(*mut c_void, *const c_char);
-type SubmitFn = unsafe extern "C" fn(*mut c_void);
-type TabFn = unsafe extern "C" fn(*mut c_void, i32);
+type ValueChangedFn = unsafe extern "C" fn(*mut c_void, u64, *const c_char);
+type CommittedFn = unsafe extern "C" fn(*mut c_void, u64, *const c_char);
+type SubmitFn = unsafe extern "C" fn(*mut c_void, u64);
+type TabFn = unsafe extern "C" fn(*mut c_void, u64, i32);
+type KeyFn = unsafe extern "C" fn(*mut c_void, u64, *const c_char, *const c_char);
 
 unsafe extern "C" {
     fn native_input_create(
@@ -30,6 +33,8 @@ unsafe extern "C" {
         w: f64,
         h: f64,
         multiline: i32,
+        secure: i32,
+        node_id: u64,
     ) -> *mut c_void;
     fn native_input_destroy(handle: *mut c_void);
     fn native_input_set_value(handle: *mut c_void, text: *const c_char);
@@ -48,6 +53,8 @@ unsafe extern "C" {
         committed: CommittedFn,
         submit: SubmitFn,
         tab: TabFn,
+        key_down: KeyFn,
+        key_up: KeyFn,
     );
 }
 
@@ -66,35 +73,85 @@ fn send_event(doc_id: usize, event: NativeEditEvent) {
     }
 }
 
+/// Convert a null-terminated C string (possibly null) into an owned `String`.
+unsafe fn cstr_to_string(ptr: *const c_char) -> String {
+    if ptr.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rust callbacks (registered into the ObjC helper)
 // ---------------------------------------------------------------------------
-unsafe extern "C" fn on_value_changed(ctx: *mut c_void, text: *const c_char) {
-    let doc_id = ctx as usize;
-    let value = if text.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned()
-    };
-    send_event(doc_id, NativeEditEvent::ValueChanged(value));
+unsafe extern "C" fn on_value_changed(ctx: *mut c_void, node_id: u64, text: *const c_char) {
+    send_event(
+        ctx as usize,
+        NativeEditEvent::ValueChanged {
+            node_id: NodeId::from_u64(node_id),
+            value: unsafe { cstr_to_string(text) },
+        },
+    );
 }
 
-unsafe extern "C" fn on_committed(ctx: *mut c_void, text: *const c_char) {
-    let doc_id = ctx as usize;
-    let value = if text.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned()
-    };
-    send_event(doc_id, NativeEditEvent::Committed(value));
+unsafe extern "C" fn on_committed(ctx: *mut c_void, node_id: u64, text: *const c_char) {
+    send_event(
+        ctx as usize,
+        NativeEditEvent::Committed {
+            node_id: NodeId::from_u64(node_id),
+            value: unsafe { cstr_to_string(text) },
+        },
+    );
 }
 
-unsafe extern "C" fn on_submit(ctx: *mut c_void) {
-    send_event(ctx as usize, NativeEditEvent::Submit);
+unsafe extern "C" fn on_submit(ctx: *mut c_void, node_id: u64) {
+    send_event(
+        ctx as usize,
+        NativeEditEvent::Submit {
+            node_id: NodeId::from_u64(node_id),
+        },
+    );
 }
 
-unsafe extern "C" fn on_tab(ctx: *mut c_void, shift: i32) {
-    send_event(ctx as usize, NativeEditEvent::Tab { shift: shift != 0 });
+unsafe extern "C" fn on_tab(ctx: *mut c_void, node_id: u64, shift: i32) {
+    send_event(
+        ctx as usize,
+        NativeEditEvent::Tab {
+            node_id: NodeId::from_u64(node_id),
+            shift: shift != 0,
+        },
+    );
+}
+
+unsafe extern "C" fn on_key_down(ctx: *mut c_void, node_id: u64, key: *const c_char, code: *const c_char) {
+    send_event(
+        ctx as usize,
+        NativeEditEvent::KeyDown {
+            node_id: NodeId::from_u64(node_id),
+            key: unsafe { cstr_to_string(key) }
+                .parse()
+                .unwrap_or(Key::Unidentified),
+            code: unsafe { cstr_to_string(code) }
+                .parse()
+                .unwrap_or(Code::Unidentified),
+        },
+    );
+}
+
+unsafe extern "C" fn on_key_up(ctx: *mut c_void, node_id: u64, key: *const c_char, code: *const c_char) {
+    send_event(
+        ctx as usize,
+        NativeEditEvent::KeyUp {
+            node_id: NodeId::from_u64(node_id),
+            key: unsafe { cstr_to_string(key) }
+                .parse()
+                .unwrap_or(Key::Unidentified),
+            code: unsafe { cstr_to_string(code) }
+                .parse()
+                .unwrap_or(Code::Unidentified),
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +187,7 @@ impl MacOSNativeTextInput {
 impl NativeTextInput for MacOSNativeTextInput {
     fn create(
         &self,
+        node_id: NodeId,
         geometry: &NativeEditGeometry,
         style: &NativeEditStyle,
         attrs: &NativeEditAttrs,
@@ -146,6 +204,8 @@ impl NativeTextInput for MacOSNativeTextInput {
                 bw as f64,
                 bh as f64,
                 attrs.multiline as i32,
+                (attrs.input_type == "password") as i32,
+                node_id.as_u64(),
             )
         };
         if handle.is_null() {
@@ -159,6 +219,8 @@ impl NativeTextInput for MacOSNativeTextInput {
                 on_committed,
                 on_submit,
                 on_tab,
+                on_key_down,
+                on_key_up,
             );
         }
         *self.handle.lock().unwrap() = handle;
@@ -192,14 +254,8 @@ impl NativeTextInput for MacOSNativeTextInput {
     }
 
     fn get_value(&self) -> String {
-        self.with_handle(|handle| unsafe {
-            let ptr = native_input_get_value(handle);
-            if ptr.is_null() {
-                return String::new();
-            }
-            CStr::from_ptr(ptr).to_string_lossy().into_owned()
-        })
-        .unwrap_or_default()
+        self.with_handle(|handle| unsafe { cstr_to_string(native_input_get_value(handle)) })
+            .unwrap_or_default()
     }
 
     fn update_bounds(&self, geometry: &NativeEditGeometry) {

@@ -325,7 +325,9 @@ impl DocumentMutator<'_> {
             // R5 (KTD6): push a guest/programmatic value into the active
             // native control. Suppressed while the engine mirrors the control's
             // own edit back into the DOM (avoids a mirror loop) and when the
-            // session belongs to a different node.
+            // session belongs to a different node. `last_value` is synced so a
+            // later blur-commit of the same value is recognized as a no-op and
+            // does not dispatch a spurious `input` for the guest's own text.
             if !self.doc.native_edit_mirror_in_progress
                 && self
                     .doc
@@ -333,6 +335,9 @@ impl DocumentMutator<'_> {
                     .as_ref()
                     .is_some_and(|session| session.node_id == node_id)
             {
+                if let Some(session) = self.doc.native_edit_session.as_mut() {
+                    session.last_value = value.to_string();
+                }
                 self.doc.shell_provider.native_edit_set_value(value);
             }
             return;

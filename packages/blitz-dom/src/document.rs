@@ -12,7 +12,7 @@ use crate::selection::TextSelection;
 use crate::stylo_to_cursor_icon::stylo_to_cursor_icon;
 use crate::traversal::TreeTraverser;
 use crate::url::DocumentUrl;
-use crate::util::ImageType;
+use crate::util::{ImageType, ToColorColor as _};
 use crate::{
     DEFAULT_CSS, DocumentConfig, DocumentMutator, DummyHtmlParserProvider, ElementData,
     EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, StyleThreading,
@@ -31,7 +31,7 @@ use blitz_traits::net::{AbortSignal, Bytes, DummyNetProvider, NetProvider, Reque
 use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::{ColorScheme, DummyShellProvider, ShellProvider, Viewport};
 use cursor_icon::CursorIcon;
-use keyboard_types::{Location, Modifiers};
+use keyboard_types::{Code, Key, Location, Modifiers};
 use linebender_resource_handle::Blob;
 use markup5ever::local_name;
 use parley::{FontContext, PlainEditorDriver};
@@ -446,11 +446,11 @@ pub struct NativeEditSession {
     pub last_value: String,
 }
 
-/// Convert a stylo absolute color to `(r, g, b, a)` floats in 0..=1 (srgb).
+/// Convert a stylo absolute color to `(r, g, b, a)` floats in 0..=1 (srgb),
+/// reusing the crate's `ToColorColor` srgb conversion.
 fn srgb_rgba(color: &style::color::AbsoluteColor) -> (f32, f32, f32, f32) {
-    let srgb = color.to_color_space(style::color::ColorSpace::Srgb);
-    let comps = srgb.raw_components();
-    (comps[0], comps[1], comps[2], comps[3])
+    let c = color.as_color_color().components;
+    (c[0], c[1], c[2], c[3])
 }
 
 /// CSS keyword for a generic font family, for the native control's font stack.
@@ -505,23 +505,35 @@ impl BaseDocument {
     /// implicit form submission. Stale events (no active session) are dropped.
     pub fn handle_native_edit_event(&mut self, event: NativeEditEvent) {
         // Stale-event guard (KTD2): backend events are queued asynchronously,
-        // so one may arrive after the session already ended.
-        let Some(session) = self.native_edit_session.clone() else {
+        // so one may arrive after the session ended — or after a NEW session
+        // started on a different element (e.g. the previous control's teardown
+        // blur). Every event carries the node it was bound to at create, so an
+        // event from a previous session's control is dropped even when another
+        // session is active. Borrow only the copyable `node_id` — the session
+        // strings/geometry are not needed here and cloning them per event
+        // (per keystroke) would be wasted work.
+        let Some(session_node) = self.native_edit_session.as_ref().map(|s| s.node_id) else {
             return;
         };
-        let node_id = session.node_id;
+        if event.node_id() != session_node {
+            // Event from a different (ended) control — not for the active
+            // session. The value was live-mirrored per keystroke (R4), so
+            // dropping it loses nothing.
+            return;
+        }
+        let node_id = session_node;
         match event {
-            NativeEditEvent::ValueChanged(value) => {
+            NativeEditEvent::ValueChanged { value, .. } => {
                 self.native_edit_value_changed(node_id, value, false);
             }
-            NativeEditEvent::Committed(value) => {
+            NativeEditEvent::Committed { value, .. } => {
                 self.native_edit_value_changed(node_id, value, true);
             }
-            NativeEditEvent::Submit => {
+            NativeEditEvent::Submit { .. } => {
                 self.end_native_edit_session();
                 implicit_form_submission(self, node_id);
             }
-            NativeEditEvent::Tab { shift } => {
+            NativeEditEvent::Tab { shift, .. } => {
                 if shift {
                     self.focus_prev_node();
                 } else {
@@ -530,49 +542,66 @@ impl BaseDocument {
                 // `set_focus_to` ends the old session and starts one on the
                 // next covered input (or none, when the target isn't covered).
             }
-            NativeEditEvent::KeyDown { key, code } => {
-                self.native_edit_pending_events.push_back(DomEvent::new(
-                    node_id,
-                    DomEventData::KeyDown(BlitzKeyEvent {
-                        key,
-                        code,
-                        modifiers: Modifiers::empty(),
-                        location: Location::Standard,
-                        is_auto_repeating: false,
-                        is_composing: false,
-                        state: KeyState::Pressed,
-                        text: None,
-                    }),
-                ));
+            NativeEditEvent::KeyDown { key, code, .. } => {
+                self.push_native_key_event(node_id, key, code, KeyState::Pressed);
             }
-            NativeEditEvent::KeyUp { key, code } => {
-                self.native_edit_pending_events.push_back(DomEvent::new(
-                    node_id,
-                    DomEventData::KeyUp(BlitzKeyEvent {
-                        key,
-                        code,
-                        modifiers: Modifiers::empty(),
-                        location: Location::Standard,
-                        is_auto_repeating: false,
-                        is_composing: false,
-                        state: KeyState::Released,
-                        text: None,
-                    }),
-                ));
+            NativeEditEvent::KeyUp { key, code, .. } => {
+                self.push_native_key_event(node_id, key, code, KeyState::Released);
             }
-            NativeEditEvent::CompositionPreedit(text) => {
+            NativeEditEvent::CompositionPreedit { text, .. } => {
                 self.native_edit_pending_events.push_back(DomEvent::new(
                     node_id,
                     DomEventData::Ime(BlitzImeEvent::Preedit(text, None)),
                 ));
             }
-            NativeEditEvent::CompositionCommit(text) => {
+            NativeEditEvent::CompositionCommit { text, .. } => {
+                // Dispatch the Ime Commit first (browser order:
+                // `compositionend` then the trailing `input`), then mirror the
+                // committed text so the DOM/guest value is correct even when
+                // no trailing input event arrives (R4/R8). The `last_value`
+                // no-op guard dedupes against a browser trailing input.
                 self.native_edit_pending_events.push_back(DomEvent::new(
                     node_id,
-                    DomEventData::Ime(BlitzImeEvent::Commit(text)),
+                    DomEventData::Ime(BlitzImeEvent::Commit(text.clone())),
                 ));
+                self.native_edit_value_changed(node_id, text, false);
             }
         }
+    }
+
+    /// Queue a session-element `KeyDown`/`KeyUp` for guest dispatch (KTD8).
+    /// The event carries no modifiers/text — the overlay owns editing, so the
+    /// engine reports the bare key to the guest handler-only.
+    fn push_native_key_event(
+        &mut self,
+        node_id: NodeId,
+        key: Key,
+        code: Code,
+        state: KeyState,
+    ) {
+        let data = match state {
+            KeyState::Pressed => DomEventData::KeyDown(BlitzKeyEvent {
+                key,
+                code,
+                modifiers: Modifiers::empty(),
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state,
+                text: None,
+            }),
+            KeyState::Released => DomEventData::KeyUp(BlitzKeyEvent {
+                key,
+                code,
+                modifiers: Modifiers::empty(),
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state,
+                text: None,
+            }),
+        };
+        self.native_edit_pending_events.push_back(DomEvent::new(node_id, data));
     }
 
     /// Mirror a native-control value change into the DOM (R4/R6): set the value
@@ -640,7 +669,7 @@ impl BaseDocument {
             .to_string();
         let ok = self
             .shell_provider
-            .begin_native_edit_session(&geometry, &style, &attrs);
+            .begin_native_edit_session(node_id, &geometry, &style, &attrs);
         if !ok {
             // Fail-close: keep the parley path.
             return;
@@ -657,6 +686,7 @@ impl BaseDocument {
     }
 
     /// Box geometry of `node_id` in viewport coordinates (content + border).
+    /// Computes the ancestor walk once and derives both boxes from it.
     fn native_edit_geometry(&self, node_id: NodeId) -> Option<NativeEditGeometry> {
         let node = self.get_node(node_id)?;
         let layout = node.final_layout();
@@ -766,22 +796,35 @@ impl BaseDocument {
     }
 
     /// Re-push geometry/style to the active native control (R10/R12) when the
-    /// session element's box changed (layout, resize, or scroll).
+    /// session element's box changed (layout, resize, or scroll). Runs on
+    /// every resolve pass, so it borrows (never clones) the session and
+    /// returns immediately when the box is unchanged.
     pub fn update_native_edit_session_geometry(&mut self) {
-        let Some(session) = self.native_edit_session.clone() else {
+        let Some(node_id) = self.native_edit_session.as_ref().map(|s| s.node_id) else {
             return;
         };
-        let Some(geometry) = self.native_edit_geometry(session.node_id) else {
+        let Some(geometry) = self.native_edit_geometry(node_id) else {
             return;
         };
-        if geometry == session.geometry {
+        let changed = self
+            .native_edit_session
+            .as_ref()
+            .is_some_and(|s| s.geometry != geometry);
+        if !changed {
             return;
         }
         if let Some(session) = self.native_edit_session.as_mut() {
-            session.geometry = geometry.clone();
+            session.geometry = geometry;
         }
-        self.shell_provider
-            .update_native_edit_geometry(&geometry);
+        self.shell_provider.update_native_edit_geometry(&geometry);
+        // R12: the control mirrors computed style; a box change (relayout)
+        // can also change it, so re-push style alongside geometry (U2.8).
+        if let Some(style) = self.native_edit_style(node_id) {
+            if let Some(session) = self.native_edit_session.as_mut() {
+                session.style = style.clone();
+            }
+            self.shell_provider.update_native_edit_style(&style);
+        }
     }
 
     /// Create a new (empty) [`BaseDocument`] with the specified configuration

@@ -1,6 +1,7 @@
 //! Abstraction over windowing / operating system ("shell") functionality
 
 use crate::native_input::{NativeEditAttrs, NativeEditGeometry, NativeEditStyle};
+use crate::node_id::NodeId;
 use cursor_icon::CursorIcon;
 
 /// Type representing an error performing a clipboard operation
@@ -37,10 +38,13 @@ pub trait ShellProvider: Send + Sync + 'static {
         false
     }
 
-    /// Begin a native-edit session for a focused element. Returns whether the
+    /// Begin a native-edit session for a focused element. `node_id` is bound
+    /// to the control and echoed back in every [`NativeEditEvent`] so the
+    /// engine can attribute events to this session (KTD2). Returns whether the
     /// control was created (fail-close: a `false` keeps the parley path).
     fn begin_native_edit_session(
         &self,
+        _node_id: NodeId,
         _geometry: &NativeEditGeometry,
         _style: &NativeEditStyle,
         _attrs: &NativeEditAttrs,
@@ -113,6 +117,7 @@ mod tests {
         let provider = DummyShellProvider;
         assert!(!provider.native_edit_capable());
         assert!(!provider.begin_native_edit_session(
+            crate::node_id::NodeId::from_u64(1),
             &NativeEditGeometry::default(),
             &NativeEditStyle::default(),
             &NativeEditAttrs::default(),

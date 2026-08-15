@@ -38,6 +38,7 @@ pub use crate::net::DataUriNetProvider;
 ))]
 use blitz_traits::shell::FileDialogFilter;
 use blitz_traits::native_input::{NativeEditAttrs, NativeEditGeometry, NativeEditStyle, NativeTextInput};
+use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::ShellProvider;
 use std::sync::Arc;
 use winit::cursor::{Cursor, CursorIcon};
@@ -146,12 +147,13 @@ impl ShellProvider for BlitzShellProvider {
     }
     fn begin_native_edit_session(
         &self,
+        node_id: NodeId,
         geometry: &NativeEditGeometry,
         style: &NativeEditStyle,
         attrs: &NativeEditAttrs,
     ) -> bool {
         match &self.native_text_input {
-            Some(backend) => backend.create(geometry, style, attrs),
+            Some(backend) => backend.create(node_id, geometry, style, attrs),
             None => false,
         }
     }

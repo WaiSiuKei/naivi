@@ -97,10 +97,10 @@ impl NaiviDocument {
     /// and this method holds no `RefCell` borrow of `Self`, so it is safe to
     /// call from host `DocHandle::poll` implementations that must keep an
     /// immutable borrow across the subsequent JS sink drain.
-    pub fn poll_native_edit_events(&self) -> bool {
+    pub fn poll_native_edit_events(&self) {
         let pending: Vec<DomEvent> = self.inner.borrow_mut().drain_native_edit_events();
         if pending.is_empty() {
-            return false;
+            return;
         }
         let handler = NaiviEventHandler {
             bindings: Rc::clone(&self.bindings),
@@ -111,7 +111,6 @@ impl NaiviDocument {
         for event in pending {
             driver.handle_event_to_handler(event);
         }
-        true
     }
 
     /// Decode + apply one binary DOM-change frame as a whole transaction

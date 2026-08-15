@@ -23,6 +23,7 @@ anyrender_vello_hybrid = { workspace = true }
 blitz-dom = { workspace = true, features = ["system-fonts"] }
 blitz-shell = { workspace = true, default-features = false, features = ["tracing"] }
 blitz-traits = { workspace = true }
+keyboard-types = { workspace = true }
 raw-window-handle = { workspace = true }
 
 # Logging

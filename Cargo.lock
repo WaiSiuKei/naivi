@@ -4671,6 +4671,7 @@ dependencies = [
  "blitz-shell",
  "blitz-traits",
  "cc",
+ "keyboard-types 0.7.0",
  "naivi-dom",
  "naivi-guest-quickjs",
  "raw-window-handle",

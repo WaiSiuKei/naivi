@@ -10,23 +10,28 @@
 // ---------------------------------------------------------------------------
 // Callbacks into Rust
 // ---------------------------------------------------------------------------
-typedef void (*value_changed_fn)(void *ctx, const char *text);
-typedef void (*committed_fn)(void *ctx, const char *text);
-typedef void (*submit_fn)(void *ctx);
-typedef void (*tab_fn)(void *ctx, int shift);
+typedef void (*value_changed_fn)(void *ctx, uint64_t node_id, const char *text);
+typedef void (*committed_fn)(void *ctx, uint64_t node_id, const char *text);
+typedef void (*submit_fn)(void *ctx, uint64_t node_id);
+typedef void (*tab_fn)(void *ctx, uint64_t node_id, int shift);
+typedef void (*key_fn)(void *ctx, uint64_t node_id, const char *key, const char *code);
 
 // The handle: the control + the Rust callbacks/ctx.
 typedef struct {
     __unsafe_unretained NSView *parent;
-    NSView *control;          // NSTextField (single) or NSScrollView->NSTextView (multi)
+    NSView *control;          // NSTextField/NSSecureTextField (single) or NSScrollView->NSTextView (multi)
     NSTextView *textView;     // non-nil for multiline
     int multiline;
+    int secure;
     BOOL isProgrammatic;
+    uint64_t node_id;
     void *ctx;
     value_changed_fn on_value_changed;
     committed_fn on_committed;
     submit_fn on_submit;
     tab_fn on_tab;
+    key_fn on_key_down;
+    key_fn on_key_up;
 } NativeInputHandle;
 
 // AppKit uses a bottom-left origin; blitz reports top-left window coordinates,
@@ -58,7 +63,7 @@ static void set_text_buffer(const char *text) {
     @autoreleasepool {
         NSTextField *field = (NSTextField *)notification.object;
         const char *utf8 = field.stringValue.UTF8String;
-        h->on_value_changed(h->ctx, utf8 != NULL ? utf8 : "");
+        h->on_value_changed(h->ctx, h->node_id, utf8 != NULL ? utf8 : "");
     }
 }
 
@@ -68,7 +73,7 @@ static void set_text_buffer(const char *text) {
     @autoreleasepool {
         NSTextField *field = (NSTextField *)notification.object;
         const char *utf8 = field.stringValue.UTF8String;
-        h->on_committed(h->ctx, utf8 != NULL ? utf8 : "");
+        h->on_committed(h->ctx, h->node_id, utf8 != NULL ? utf8 : "");
     }
 }
 
@@ -78,7 +83,7 @@ static void set_text_buffer(const char *text) {
     @autoreleasepool {
         NSTextView *view = (NSTextView *)notification.object;
         const char *utf8 = view.string.UTF8String;
-        h->on_value_changed(h->ctx, utf8 != NULL ? utf8 : "");
+        h->on_value_changed(h->ctx, h->node_id, utf8 != NULL ? utf8 : "");
     }
 }
 
@@ -88,24 +93,49 @@ static void set_text_buffer(const char *text) {
     @autoreleasepool {
         NSTextView *view = (NSTextView *)notification.object;
         const char *utf8 = view.string.UTF8String;
-        h->on_committed(h->ctx, utf8 != NULL ? utf8 : "");
+        h->on_committed(h->ctx, h->node_id, utf8 != NULL ? utf8 : "");
     }
+}
+
+// Map a command selector to a (key, code) pair for guest forwarding (KTD8).
+// Returns NO when the selector has no meaningful key mapping.
+static BOOL key_for_selector(SEL commandSelector, const char **key, const char **code) {
+    if (commandSelector == @selector(insertNewline:)) { *key = "Enter"; *code = "Enter"; return YES; }
+    if (commandSelector == @selector(insertTab:)) { *key = "Tab"; *code = "Tab"; return YES; }
+    if (commandSelector == @selector(insertBacktab:)) { *key = "Tab"; *code = "Tab"; return YES; }
+    if (commandSelector == @selector(cancelOperation:)) { *key = "Escape"; *code = "Escape"; return YES; }
+    if (commandSelector == @selector(moveUp:)) { *key = "ArrowUp"; *code = "ArrowUp"; return YES; }
+    if (commandSelector == @selector(moveDown:)) { *key = "ArrowDown"; *code = "ArrowDown"; return YES; }
+    if (commandSelector == @selector(moveLeft:)) { *key = "ArrowLeft"; *code = "ArrowLeft"; return YES; }
+    if (commandSelector == @selector(moveRight:)) { *key = "ArrowRight"; *code = "ArrowRight"; return YES; }
+    if (commandSelector == @selector(deleteBackward:)) { *key = "Backspace"; *code = "Backspace"; return YES; }
+    if (commandSelector == @selector(deleteForward:)) { *key = "Delete"; *code = "Delete"; return YES; }
+    return NO;
 }
 
 - (BOOL)handleCommandSelector:(SEL)commandSelector {
     NativeInputHandle *h = self.handle;
     if (h == NULL) return NO;
-    if (commandSelector == @selector(insertTab:)) {
-        if (h->on_tab) h->on_tab(h->ctx, 0);
-        return YES;
-    }
-    if (commandSelector == @selector(insertBacktab:)) {
-        if (h->on_tab) h->on_tab(h->ctx, 1);
+    if (commandSelector == @selector(insertTab:) || commandSelector == @selector(insertBacktab:)) {
+        if (h->on_tab) h->on_tab(h->ctx, h->node_id, commandSelector == @selector(insertBacktab:) ? 1 : 0);
         return YES;
     }
     if (commandSelector == @selector(insertNewline:) && !h->multiline) {
-        if (h->on_submit) h->on_submit(h->ctx);
+        // Mirror the wasm backend: forward the full key sequence before
+        // `Submit` ends the session so the guest's `@keyup.enter` fires (KTD8).
+        if (h->on_key_down) h->on_key_down(h->ctx, h->node_id, "Enter", "Enter");
+        if (h->on_key_up) h->on_key_up(h->ctx, h->node_id, "Enter", "Enter");
+        if (h->on_submit) h->on_submit(h->ctx, h->node_id);
         return YES;
+    }
+    const char *key = NULL;
+    const char *code = NULL;
+    if (key_for_selector(commandSelector, &key, &code)) {
+        // Forward special keys (Escape, arrows, …) so guest @keyup.* / @keydown.*
+        // handlers keep working during the session (KTD8); the default action
+        // still runs (return NO).
+        if (h->on_key_down) h->on_key_down(h->ctx, h->node_id, key, code);
+        if (h->on_key_up) h->on_key_up(h->ctx, h->node_id, key, code);
     }
     return NO;
 }
@@ -124,7 +154,8 @@ static void set_text_buffer(const char *text) {
 // Public C API
 // ---------------------------------------------------------------------------
 
-void *native_input_create(void *nsViewPtr, double x, double y, double w, double h, int multiline) {
+void *native_input_create(void *nsViewPtr, double x, double y, double w, double h,
+                          int multiline, int secure, uint64_t node_id) {
     @autoreleasepool {
         @try {
             NSView *parent = (__bridge NSView *)nsViewPtr;
@@ -133,6 +164,8 @@ void *native_input_create(void *nsViewPtr, double x, double y, double w, double 
             NativeInputHandle *handle = calloc(1, sizeof(NativeInputHandle));
             handle->parent = parent;
             handle->multiline = multiline;
+            handle->secure = secure;
+            handle->node_id = node_id;
             handle->isProgrammatic = NO;
 
             NativeInputDelegate *delegate = [[NativeInputDelegate alloc] init];
@@ -158,7 +191,12 @@ void *native_input_create(void *nsViewPtr, double x, double y, double w, double 
                 handle->textView = textView;
             } else {
                 double fy = flip_y(handle, y, h);
-                NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(x, fy, w, h)];
+                NSTextField *field;
+                if (secure) {
+                    field = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(x, fy, w, h)];
+                } else {
+                    field = [[NSTextField alloc] initWithFrame:NSMakeRect(x, fy, w, h)];
+                }
                 field.bezeled = NO;
                 field.bordered = NO;
                 field.drawsBackground = YES;
@@ -184,7 +222,21 @@ void native_input_destroy(void *handlePtr) {
     @autoreleasepool {
         @try {
             NativeInputHandle *handle = (NativeInputHandle *)handlePtr;
+            // Nil the callbacks before tearing the control down so a delegate
+            // callback firing during/after removal (e.g. textDidEndEditing)
+            // cannot dereference this handle (UAF guard).
+            handle->on_value_changed = NULL;
+            handle->on_committed = NULL;
+            handle->on_submit = NULL;
+            handle->on_tab = NULL;
+            handle->on_key_down = NULL;
+            handle->on_key_up = NULL;
             [handle->control removeFromSuperview];
+            // Under ARC, the `control`/`textView` fields are strong; niling
+            // them releases the NSTextField/NSScrollView+NSTextView and the
+            // associated delegate (leak fix for repeated focus/Tab cycles).
+            handle->textView = nil;
+            handle->control = nil;
             free(handle);
         } @catch (NSException *e) {
             NSLog(@"native_input_destroy error: %@", e.reason);
@@ -200,12 +252,24 @@ void native_input_set_value(void *handlePtr, const char *text) {
             handle->isProgrammatic = YES;
             NSString *s = [NSString stringWithUTF8String:text != NULL ? text : ""];
             if (handle->multiline) {
+                // Preserve the caret/selection across the programmatic set (R5,
+                // KTD6) — matches the wasm backend's set_preserving_selection.
+                NSRange sel = handle->textView.selectedRange;
                 handle->textView.string = s;
+                NSUInteger len = s.length;
+                if (sel.location > len) sel.location = len;
+                if (sel.location + sel.length > len) sel.length = len - sel.location;
+                handle->textView.selectedRange = sel;
             } else {
                 NSTextField *field = (NSTextField *)handle->control;
-                if (field.currentEditor != nil) {
-                    // Update the live field editor (KTD6).
-                    field.currentEditor.string = s;
+                NSTextView *editor = field.currentEditor;
+                NSRange sel = editor != nil ? editor.selectedRange : NSMakeRange(0, 0);
+                if (editor != nil) {
+                    editor.string = s;
+                    NSUInteger len = s.length;
+                    if (sel.location > len) sel.location = len;
+                    if (sel.location + sel.length > len) sel.length = len - sel.location;
+                    editor.selectedRange = sel;
                 } else {
                     field.stringValue = s;
                 }
@@ -278,8 +342,22 @@ void native_input_set_font(void *handlePtr, const char *family, double size, dou
             NativeInputHandle *handle = (NativeInputHandle *)handlePtr;
             NSFont *font = [NSFont systemFontOfSize:size > 0 ? size : 13.0];
             if (family != NULL && strlen(family) > 0) {
-                NSFont *named = [NSFont fontWithName:[NSString stringWithUTF8String:family] size:size > 0 ? size : 13.0];
-                if (named != nil) font = named;
+                // The CSS font stack is a comma-joined list ("Noto Sans, sans-serif");
+                // fontWithName: needs a single PostScript name, so take the first
+                // usable family (R12).
+                NSArray<NSString *> *parts = [[NSString stringWithUTF8String:family] componentsSeparatedByString:@","];
+                for (NSString *part in parts) {
+                    NSString *trimmed = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                    trimmed = [trimmed stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\"'"] ];
+                    if (trimmed.length == 0) continue;
+                    if ([trimmed.lowercaseString isEqualToString:@"sans-serif"] ||
+                        [trimmed.lowercaseString isEqualToString:@"serif"] ||
+                        [trimmed.lowercaseString isEqualToString:@"monospace"] ||
+                        [trimmed.lowercaseString isEqualToString:@"cursive"] ||
+                        [trimmed.lowercaseString isEqualToString:@"fantasy"]) continue;
+                    NSFont *named = [NSFont fontWithName:trimmed size:size > 0 ? size : 13.0];
+                    if (named != nil) { font = named; break; }
+                }
             }
             if (handle->multiline) {
                 handle->textView.font = font;
@@ -366,7 +444,8 @@ void native_input_set_editable(void *handlePtr, int editable, int enabled) {
 
 void native_input_set_callbacks(void *handlePtr, void *ctx,
                                 value_changed_fn valueChanged, committed_fn committed,
-                                submit_fn submit, tab_fn tab) {
+                                submit_fn submit, tab_fn tab,
+                                key_fn keyDown, key_fn keyUp) {
     if (handlePtr == NULL) return;
     NativeInputHandle *handle = (NativeInputHandle *)handlePtr;
     handle->ctx = ctx;
@@ -374,4 +453,6 @@ void native_input_set_callbacks(void *handlePtr, void *ctx,
     handle->on_committed = committed;
     handle->on_submit = submit;
     handle->on_tab = tab;
+    handle->on_key_down = keyDown;
+    handle->on_key_up = keyUp;
 }

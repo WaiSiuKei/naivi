@@ -311,11 +311,8 @@ pub fn start() -> Result<(), JsValue> {
             };
             native_input::init_dom(canvas.clone());
             let backend = native_input::WasmNativeTextInput::new(doc_id, proxy.clone());
-            native_input::set_backend(backend);
-            Some(Arc::new(native_input::WasmNativeTextInput::new(
-                doc_id,
-                proxy,
-            )))
+            native_input::set_backend(backend.clone());
+            Some(Arc::new(backend))
         }));
 
     let mut app = BlitzApplication::<VelloHybridWindowRenderer>::new(proxy, rx);
