@@ -382,6 +382,15 @@ export function resolveDesktopViteConfig(
         // codeSplitting defaults to false for IIFE; the bundle is single-file.
         entryFileNames: basename(options.outfile),
       },
+      // IIFE cannot express `import.meta` (rolldown would otherwise emit
+      // EMPTY_IMPORT_META warnings for the desktop entry's dynamic imports
+      // and Vite's injected preload helper). In this single-file bundle all
+      // dynamic imports are inlined, so the replacement `{}` is dead code —
+      // define it explicitly to silence the warning (rolldown docs,
+      // "Non ESM Output Formats" → `import.meta`).
+      transform: {
+        define: { 'import.meta': '{}' },
+      },
     },
   };
   return merged;
