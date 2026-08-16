@@ -1,0 +1,9 @@
+# naivi shared wasm host (trunk).
+#
+# Build with RELATIVE paths so the produced dist/ is a self-contained,
+# portable static site: it works served from any base path or subdirectory
+# (and over file://). Without this, trunk emits absolute `/...` URLs in
+# index.html which 404 whenever the site is not served at the server root
+# (e.g. IDE built-in preview servers like WebStorm's :63342).
+[build]
+public_url = "./"

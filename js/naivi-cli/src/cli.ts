@@ -90,7 +90,13 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
   const trunkCrateDir = join(root, 'packages', 'naivi-wasm');
   if (parsed.release) {
     console.log(C.dim('[naivi] Building wasm host (trunk build --release)...'));
-    execFileSync('trunk', ['build', '--release'], { cwd: trunkCrateDir, stdio: 'inherit' });
+    // --public-url ./ (also pinned in packages/naivi-wasm/Trunk.toml) keeps
+    // index.html's asset URLs relative, so dist/ is portable to any base
+    // path / static host / IDE preview server.
+    execFileSync('trunk', ['build', '--release', '--public-url', './'], {
+      cwd: trunkCrateDir,
+      stdio: 'inherit',
+    });
 
     // Assemble the deployable site into <demo>/dist/: copy the built shared
     // host (wasm engine + host page + THIS demo's guest, which buildWasmSite
@@ -112,10 +118,12 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
   }
   console.log(C.ok(`nv wasm → http://localhost:${port}`));
   // Blocking: the trunk host owns the dev server until Ctrl+C.
-  execFileSync('trunk', ['serve', '--release', '--port', String(port)], {
-    cwd: trunkCrateDir,
-    stdio: 'inherit',
-  });
+  // --public-url ./ keeps dev URL paths relative, matching the release build.
+  execFileSync(
+    'trunk',
+    ['serve', '--release', '--port', String(port), '--public-url', './'],
+    { cwd: trunkCrateDir, stdio: 'inherit' },
+  );
 }
 
 /**
