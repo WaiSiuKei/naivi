@@ -1,0 +1,40 @@
+name: Pages — wasm demos
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow one deployment at a time and a single deploy job.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Builds each demo (examples/naivi/{counter,todomvc}) STANDALONE with
+      # the published @naivi/* packages — no Rust / trunk needed. Output:
+      # _site/ with index.html + counter/ + todomvc/.
+      - name: Build wasm demos
+        run: node scripts/pages-build.mjs
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4

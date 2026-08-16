@@ -11,6 +11,7 @@
 /wpt/*.json
 /apps/wpt/output
 /sites
+/_site
 .blitz-cache
 /dist
 
