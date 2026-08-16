@@ -1,6 +1,6 @@
 {
   "name": "@naivi/protocol",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "Single Source of Truth for the naivi bridge protocol — event kinds / wire tables, consumed by the JS runtime (import) and by naivi-dom's build.rs (naive literal-table parse)",
   "license": "MIT OR Apache-2.0",
@@ -28,7 +28,8 @@
     "LICENSE-APACHE"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "build": "tsc",

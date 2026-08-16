@@ -1,6 +1,6 @@
 {
   "name": "@naivi/compiler",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "AOT compiler for naive — Vue SFC to RenderTree IR + Style IR",
   "type": "module",
   "license": "MIT OR Apache-2.0",
@@ -24,7 +24,8 @@
     "LICENSE-APACHE"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "build": "tsc",
