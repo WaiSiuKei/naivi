@@ -15,9 +15,11 @@
 //    main bundle first; `app.whenReady()` + `loadFile('index.html')` drive
 //    window creation and page loading (`loadFile` evals the page bundle).
 //
-// `--release` packaging is deferred to U7.
+// `nv desktop --release` (U7, macOS first) additionally assembles
+// `release/<name>.app` from those bundles + the release binary
+// (`packageDesktopApp`).
 
-import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'vite';
@@ -146,21 +148,15 @@ export async function buildDesktopMainBundle(
 
 export async function cmdDesktopImpl(root: string, cwd: string, release: boolean): Promise<void> {
   // R11: main is mandatory for desktop (requireMain); pages with an
-  // index.html page are required too, matching wasm/web. `--release`
-  // packaging is deferred to U7.
+  // index.html page are required too, matching wasm/web. `--release` also
+  // requires `name` — it names the .app bundle (U7).
   const commandLabel = release ? 'nv desktop --release' : 'nv desktop';
   const config = await loadNaiveConfig(cwd, {
     requireMain: true,
     requirePages: true,
-    requireName: false,
+    requireName: release,
     commandLabel,
   });
-
-  if (release) {
-    throw new Error(
-      'nv desktop --release: not implemented in U5 (macOS .app packaging lands in U7)',
-    );
-  }
 
   // The loader guarantees a non-empty `main` when `requireMain` is set (R11);
   // the guard narrows the optional type for the bundling step below.
@@ -195,6 +191,20 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
   const pageEntry = findPageEntry(cwd);
   const pageBundlePath = await buildDesktopBundle(root, cwd, pageEntry);
 
+  if (release) {
+    // U7: macOS .app packaging. `name` is guaranteed by requireName above;
+    // the guard narrows the optional type.
+    if (!config.name) {
+      throw new Error(`${commandLabel}: naive.config.ts must declare \`name\``);
+    }
+    await packageDesktopApp(root, cwd, config.name, {
+      mainBundlePath,
+      pageBundlePath,
+      stylesPath,
+    });
+    return;
+  }
+
   // The native host is a SINGLE shared generic crate (`naivi-native`): it
   // evals the main bundle (app.whenReady → NaiveWindow.loadFile → page
   // bundle) for whichever demo's bundles it is handed. No per-demo host
@@ -226,4 +236,113 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
     }
     throw error;
   }
+}
+
+/**
+ * macOS .app packaging for `nv desktop --release` (plan 065, U7 — macOS
+ * first). Assembles `release/<name>.app` (name kebab-cased from
+ * `naive.config.ts` `name`, e.g. "Naivi TodoMVC" → `naivi-todomvc.app`):
+ *
+ *   Contents/
+ *     Info.plist            — name / display name / bundle id / launcher
+ *     MacOS/
+ *       naivi-native        — the release binary (`cargo build -p naivi-native`)
+ *       launcher            — execs naivi-native against the Resources bundles
+ *     Resources/
+ *       main-bundle.js      — desktop main bundle (whenReady + NaiveWindow)
+ *       page-bundle.js      — page bundle (mount → desktop entry)
+ *       styles.css          — compiled author CSS (__NAIVE_CSS)
+ *       index.html          — loadFile('index.html') resolves against here
+ *
+ * Launch with `open release/<name>.app`.
+ */
+export async function packageDesktopApp(
+  root: string,
+  cwd: string,
+  name: string,
+  bundles: { mainBundlePath: string; pageBundlePath: string; stylesPath: string },
+): Promise<void> {
+  const kebab =
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'naive-app';
+
+  // Build the shared native host as a release binary (no per-demo host
+  // crates — the same binary serves every app).
+  console.log(C.dim('[naivi] Building native host (cargo build --release -p naivi-native)...'));
+  execFileSync('cargo', ['build', '--release', '-p', 'naivi-native'], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+  const hostBinary = join(root, 'target', 'release', 'naivi-native');
+  if (!existsSync(hostBinary)) {
+    throw new Error(`nv desktop --release: native host binary not found at ${hostBinary}`);
+  }
+
+  const appDir = join(cwd, 'release', `${kebab}.app`);
+  const macosDir = join(appDir, 'Contents', 'MacOS');
+  const resourcesDir = join(appDir, 'Contents', 'Resources');
+
+  rmSync(appDir, { recursive: true, force: true });
+  mkdirSync(macosDir, { recursive: true });
+  mkdirSync(resourcesDir, { recursive: true });
+
+  cpSync(hostBinary, join(macosDir, 'naivi-native'));
+  writeFileSync(join(macosDir, 'launcher'), makeLauncherScript());
+  chmodSync(join(macosDir, 'naivi-native'), 0o755);
+  chmodSync(join(macosDir, 'launcher'), 0o755);
+
+  cpSync(bundles.mainBundlePath, join(resourcesDir, 'main-bundle.js'));
+  cpSync(bundles.pageBundlePath, join(resourcesDir, 'page-bundle.js'));
+  cpSync(bundles.stylesPath, join(resourcesDir, 'styles.css'));
+  cpSync(join(cwd, 'index.html'), join(resourcesDir, 'index.html'));
+  writeFileSync(join(appDir, 'Contents', 'Info.plist'), makeInfoPlist(kebab, name));
+
+  console.log(C.ok(`App → ${appDir}`));
+  console.log(C.ok(`  open ${appDir}`));
+}
+
+/** The `Contents/MacOS/launcher` script — execs the host against Resources. */
+function makeLauncherScript(): string {
+  return `#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+RES="$DIR/../Resources"
+exec "$DIR/naivi-native" "$RES/main-bundle.js" "$RES/page-bundle.js" "$RES/styles.css" "$RES"
+`;
+}
+
+/** The `Contents/Info.plist` for the app bundle (name-derived ids). */
+function makeInfoPlist(kebab: string, displayName: string): string {
+  // Bundle id: com.naivi.<kebab>, dropping a redundant leading "naivi-"
+  // (so "naivi-todomvc" → com.naivi.todomvc).
+  const bundleId = kebab.startsWith('naivi-')
+    ? `com.naivi.${kebab.slice('naivi-'.length)}`
+    : `com.naivi.${kebab}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>${kebab}</string>
+    <key>CFBundleDisplayName</key>
+    <string>${displayName}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${bundleId}</string>
+    <key>CFBundleVersion</key>
+    <string>0.1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1</string>
+    <key>CFBundleExecutable</key>
+    <string>launcher</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+`;
 }
