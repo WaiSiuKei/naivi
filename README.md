@@ -55,7 +55,7 @@ npx nv web
 ```sh
 cd examples/naivi/counter
 npx nv wasm   # build guest + serve host → http://localhost:8090
-# `--release` builds the host into packages/naivi-wasm/dist instead of serving
+# `--release` builds the deployable site (wasm engine + guest) into dist/
 ```
 
 ### Native (blitz in a winit window via QuickJS)

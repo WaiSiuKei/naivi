@@ -2,7 +2,7 @@
 // @naivi/cli — naivi toolchain CLI.
 // Usage: npx nv web | npx nv wasm [--release] | npx nv desktop [--release]
 
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { C, findRoot } from './compile.ts';
@@ -16,7 +16,7 @@ Usage:
   npx nv web                 Start dev server with standard Vite (no WASM)
   npx nv web --release       Production-build the page into dist/ (no dev server)
   npx nv wasm                Build the guest + serve the WASM host (trunk, http://localhost:8090)
-  npx nv wasm --release      Build the guest + the production WASM host into packages/naivi-wasm/dist
+  npx nv wasm --release      Build the deployable WASM site (engine + guest) into dist/
   npx nv desktop             Start the native desktop renderer (QuickJS guest)
   npx nv desktop --release   Package a macOS .app bundle into release/`;
 
@@ -91,7 +91,15 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
   if (parsed.release) {
     console.log(C.dim('[naivi] Building wasm host (trunk build --release)...'));
     execFileSync('trunk', ['build', '--release'], { cwd: trunkCrateDir, stdio: 'inherit' });
-    console.log(C.ok(`Wasm host → ${join(trunkCrateDir, 'dist')}`));
+
+    // Assemble the deployable site into <demo>/dist/: copy the built shared
+    // host (wasm engine + host page + THIS demo's guest, which buildWasmSite
+    // just dropped into the host's assets/guest) so the demo's dist is a
+    // complete, self-contained static site — serve this directory.
+    const demoDist = join(cwd, 'dist');
+    rmSync(demoDist, { recursive: true, force: true });
+    cpSync(join(trunkCrateDir, 'dist'), demoDist, { recursive: true });
+    console.log(C.ok(`Wasm site → ${demoDist}`));
     console.log(C.ok(`  deployable static site (wasm engine + guest) — serve this directory`));
     return;
   }
