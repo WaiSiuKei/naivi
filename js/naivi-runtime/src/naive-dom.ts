@@ -164,10 +164,6 @@ export async function loadCSSClassStyles(): Promise<void> {
 }
 
 function createNaiveElement(tag: string): NaiveElement {
-  // Trace INPUT creation
-  if (tag === "input") {
-    console.trace("[naive] Creating INPUT element");
-  }
   // Always create a writer-backed mirror: creation now allocates a virtual id
   // and queues a CreateElement op (no synchronous host call), so the old
   // pre-WASM mock path is gone (KD3).
