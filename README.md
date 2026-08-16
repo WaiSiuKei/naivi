@@ -20,6 +20,14 @@ engine-neutral — **one code path drives both platforms**; only the host
 adapters differ. This "mutation mirror bridge" replays the same DOM operations
 a browser performs, as engine-neutral ops.
 
+## Live demos (wasm)
+
+Try the demos in your browser — Vue SFCs rendered by the blitz engine via
+WebAssembly (hosted on GitHub Pages):
+
+- **Counter** — https://waisiukei.github.io/naivi/counter/
+- **TodoMVC** — https://waisiukei.github.io/naivi/todomvc/
+
 ## Platform support
 
 naivi currently targets **three** platforms:

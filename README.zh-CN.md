@@ -19,6 +19,13 @@ JS mirror tree 与通道无关，Rust `OpsCore` 与引擎无关 —— **一套�
 只有宿主适配层不同。这种 "mutation mirror bridge" 把浏览器执行的 DOM 操作以
 引擎无关的 op 形式重放一遍。
 
+## 在线 Demo（wasm）
+
+在浏览器里体验 blitz 引擎渲染的 Vue SFC 应用（WebAssembly，托管于 GitHub Pages）：
+
+- **Counter** — https://waisiukei.github.io/naivi/counter/
+- **TodoMVC** — https://waisiukei.github.io/naivi/todomvc/
+
 ## 平台支持
 
 naivi 目前支持**三个**平台：
