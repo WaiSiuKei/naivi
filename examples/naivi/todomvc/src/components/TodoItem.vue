@@ -57,7 +57,7 @@ function deleteTodo() {
         @dblclick="startEdit"
       >{{ todo.title }}</label>
       <button
-        class="absolute inset-y-0 right-[10px] my-auto hidden h-[40px] w-[40px] text-[30px] text-[#949494] transition-colors duration-200 group-hover:block hover:text-[#C18585] after:block after:h-full after:content-['×'] after:leading-[1.1]"
+        class="absolute inset-y-0 right-[10px] my-auto hidden h-[40px] w-[40px] text-[30px] text-[#949494] transition-colors duration-200 group-hover:block hover:text-[#C18585] after:block after:h-full after:content-['×'] after:leading-[40px]"
         @click.prevent="deleteTodo"
       ></button>
     </div>
