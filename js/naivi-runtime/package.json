@@ -1,23 +1,55 @@
 {
   "name": "@naivi/runtime",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Vue Vapor runtime adapter for naive — bridges DOM-style API to WASM Renderer API",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaiSiuKei/naivi.git",
+    "directory": "js/naivi-runtime"
+  },
   "main": "./dist/native-tree.js",
   "exports": {
-    ".": "./src/native-tree.ts",
-    "./components": "./src/components.ts",
-    "./vue-vapor": "./src/index-vue-vapor.ts",
-    "./naive-dom": "./src/naive-dom.ts",
-    "./wasm-types": "./src/wasm-types.ts",
-    "./placeholder-text": "./src/placeholder-text.ts",
-    "./desktop-main": "./src/desktop-main.ts"
+    ".": {
+      "types": "./dist/native-tree.d.ts",
+      "default": "./dist/native-tree.js"
+    },
+    "./vue-vapor": {
+      "types": "./dist/index-vue-vapor.d.ts",
+      "default": "./dist/index-vue-vapor.js"
+    },
+    "./naive-dom": {
+      "types": "./dist/naive-dom.d.ts",
+      "default": "./dist/naive-dom.js"
+    },
+    "./wasm-types": {
+      "types": "./dist/wasm-types.d.ts",
+      "default": "./dist/wasm-types.js"
+    },
+    "./placeholder-text": {
+      "types": "./dist/placeholder-text.d.ts",
+      "default": "./dist/placeholder-text.js"
+    },
+    "./desktop-main": {
+      "types": "./dist/desktop-main.d.ts",
+      "default": "./dist/desktop-main.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch",
+    "prepack": "pnpm build",
     "test": "vitest run"
   },
   "dependencies": {

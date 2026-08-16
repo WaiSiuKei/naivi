@@ -18,3 +18,7 @@
 *.tsbuildinfo
 # naivi desktop release bundles (.app)
 **/release/
+
+# python venv (font tooling: pyftsubset / ttx)
+.venv
+.venv-py37-backup

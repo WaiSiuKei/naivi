@@ -1,13 +1,20 @@
 {
   "name": "@naivi/cli",
   "version": "0.1.0",
-  "private": true,
   "description": "CLI for naive — build and serve Vue Vapor apps",
   "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaiSiuKei/naivi.git",
+    "directory": "js/naivi-cli"
+  },
+  "main": "./dist/config.js",
+  "types": "./dist/config.d.ts",
   "exports": {
     ".": {
-      "types": "./src/config.ts",
-      "default": "./src/config.ts"
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
     }
   },
   "engines": {
@@ -16,10 +23,22 @@
   "bin": {
     "nv": "./bin/nv.mjs"
   },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch",
+    "prepack": "pnpm build",
     "test": "vitest run --passWithNoTests",
     "test:integration": "node tests/integration-css-check.mjs"
   },

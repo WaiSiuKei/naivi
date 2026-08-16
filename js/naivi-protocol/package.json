@@ -1,16 +1,39 @@
 {
   "name": "@naivi/protocol",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Single Source of Truth for the naivi bridge protocol — event kinds / wire tables, consumed by the JS runtime (import) and by naivi-dom's build.rs (naive literal-table parse)",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaiSiuKei/naivi.git",
+    "directory": "js/naivi-protocol"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./writer": "./src/writer.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./writer": {
+      "types": "./dist/writer.d.ts",
+      "default": "./dist/writer.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "prepack": "pnpm build",
     "test": "vitest run"
   },
   "devDependencies": {

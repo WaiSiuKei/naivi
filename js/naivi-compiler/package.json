@@ -3,11 +3,33 @@
   "version": "0.1.0",
   "description": "AOT compiler for naive — Vue SFC to RenderTree IR + Style IR",
   "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaiSiuKei/naivi.git",
+    "directory": "js/naivi-compiler"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "prepack": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
