@@ -14,6 +14,7 @@ const HELP_TEXT = `nv — naivi Vue Vapor CLI
 
 Usage:
   npx nv web                 Start dev server with standard Vite (no WASM)
+  npx nv web --release       Production-build the page into dist/ (no dev server)
   npx nv wasm                Build the guest + serve the WASM host (trunk, http://localhost:8090)
   npx nv wasm --release      Build the guest + the production WASM host into packages/naivi-wasm/dist
   npx nv desktop             Start the native desktop renderer (QuickJS guest)
@@ -21,13 +22,26 @@ Usage:
 
 // ── commands ────────────────────────────────────────────────────────
 
-async function cmdWeb(_root: string, cwd: string, port: number) {
+async function cmdWeb(_root: string, cwd: string, parsed: ParsedCommand) {
   // Pure Vite passthrough — no naive compilation, no WASM, no naive plugins.
   // Reads the `index.html` page's vite config from `naive.config.ts` (plan
   // 047, R5/KTD5); a standalone vite.config.ts is never loaded (R2). The only
   // naive addition is the `__NAIVE_PAGE_SIZE__` define (plan 049 KTD1).
+  if (parsed.release) {
+    // `nv web --release`: production-build the page into `dist/` (the page's
+    // `build.outDir`, Vite default `dist`). No dev server — mirrors
+    // `nv wasm --release` / `nv desktop --release`.
+    const { build } = await import('vite');
+    const { resolveWebBuildConfig } = await import('./vite-config.ts');
+    const config = await resolveWebBuildConfig(cwd);
+    await build(config);
+    const outDir = typeof config.build?.outDir === 'string' ? config.build.outDir : 'dist';
+    console.log(C.ok(`Web build → ${join(cwd, outDir)}`));
+    return;
+  }
+
   const { resolveWebViteConfig } = await import('./vite-config.ts');
-  const config = await resolveWebViteConfig(cwd, port);
+  const config = await resolveWebViteConfig(cwd, parsed.port);
 
   const server = await createServer(config);
 
@@ -194,7 +208,7 @@ async function main() {
     // renderer (wasm canvas / native / web) depends on a full-viewport host
     // container, and a missing `height:100%` silently collapses the canvas.
     validateHostStyles(cwd, 'nv web');
-    await cmdWeb('' /* unused */, cwd, parsed.port);
+    await cmdWeb('' /* unused */, cwd, parsed);
     return;
   }
 

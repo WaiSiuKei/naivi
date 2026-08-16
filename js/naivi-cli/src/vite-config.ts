@@ -204,6 +204,25 @@ export async function resolveWebViteConfig(
 }
 
 /**
+ * Build the `nv web --release` config: the same passthrough page config as
+ * the dev server (plan 047 U3/KTD5, plan 049 KTD1) but in production build
+ * mode — `vite build` emits the static site into the page's `build.outDir`
+ * (Vite default `dist`). Server-only keys are dropped; the page's own
+ * plugins and base are preserved unchanged.
+ */
+export async function resolveWebBuildConfig(cwd: string): Promise<InlineConfig> {
+  const page = await loadPageViteConfig(cwd, "nv web --release");
+  const userConfig = applyNaiviServerDefaults(cwd, page.vite ?? {});
+  return {
+    root: cwd,
+    ...userConfig,
+    configFile: false,
+    // Plan 049 KTD1: inject the page size into the passthrough build.
+    define: injectPageSizeDefine(userConfig, pageSizeOf(page)),
+  };
+}
+
+/**
  * Build the merged Vite configuration for the wasm pipeline.
  *
  * The naive base plugins are deduped against the page's declared plugins by

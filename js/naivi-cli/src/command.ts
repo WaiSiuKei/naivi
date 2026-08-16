@@ -1,15 +1,15 @@
 // Command parsing for the naive CLI (plan 039, U1).
 //
-// The command model is: web (pure Vite dev), wasm (dev / --release build),
-// desktop (dev / --release skeleton). Parsing is a pure function so the
-// command table is unit-testable without spawning the CLI.
+// The command model is: web (Vite dev / --release build), wasm (dev /
+// --release build), desktop (dev / --release packaging). Parsing is a pure
+// function so the command table is unit-testable without spawning the CLI.
 
 export type CliCommand = "web" | "wasm" | "desktop";
 
 export interface ParsedCommand {
   /** The resolved command, or null when the argument is not a known command. */
   command: CliCommand | null;
-  /** `--release` switches wasm/desktop into production mode. */
+  /** `--release` switches web/wasm/desktop into production mode. */
   release: boolean;
   /** `--port N` overrides the dev server port (default 3000). */
   port: number;
