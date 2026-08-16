@@ -33,6 +33,22 @@ naivi 目前支持**三个**平台：
 文本后端是 macOS 专属实现（AppKit/ObjC）。Linux/Windows 桌面以及 iOS/Android
 暂不支持。
 
+## 文本渲染与输入
+
+- **字体 — macOS 桌面**：原生 CoreText 文本后端（`packages/blitz-macos-text`
+  + naivi 维护的 parley fork）。使用系统字体，CJK 回退到苹方（PingFang SC）。
+- **字体 — wasm**：Google Fonts 分片**动态加载**——宿主按需获取字体 CSS 并调度
+  unicode-range 分片（Noto Sans / Noto Sans SC / Noto Color Emoji / Noto Sans
+  Hebrew / Noto Sans Arabic），带字重回退与懒加载的 RTL 样式表；DejaVu Sans
+  作为内置回退字体。
+- **输入 — macOS 桌面**：真正的原生文本输入——AppKit `NSTextField` /
+  `NSTextView`（原生 IME、光标/选区、padding 与字体对齐）。回车保持编辑会话
+  （隐式表单提交）；失焦 / 焦点移动 / Tab 结束会话。
+- **输入 — web（`nv web`）**：使用浏览器自身的 `<input>`（无 blitz）。
+- **输入 — wasm**：在 blitz canvas 上叠加 HTML `<input>` / `<textarea>`
+  （浏览器原生 IME + CJK 组合输入）；会话期间 canvas 跳过镜像文本的绘制，
+  失焦时提交最终值。
+
 ## 快速开始
 
 前置依赖：Node.js ≥ 24、pnpm、Rust stable（wasm 需要 `wasm32-unknown-unknown`）、

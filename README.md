@@ -34,6 +34,26 @@ The native desktop host (`packages/naivi-native`) is currently **macOS-only**:
 its native input and text backends are macOS-specific (AppKit/ObjC). Linux and
 Windows desktop, as well as iOS/Android, are not supported yet.
 
+## Text rendering & input
+
+- **Fonts — macOS desktop**: native CoreText text backend
+  (`packages/blitz-macos-text` + the naivi-maintained parley fork). System
+  fonts; CJK falls back to PingFang SC.
+- **Fonts — wasm**: Google Fonts slices are loaded **dynamically** — the host
+  fetches the font CSS and schedules unicode-range slices on demand (Noto
+  Sans / Noto Sans SC / Noto Color Emoji / Noto Sans Hebrew / Noto Sans
+  Arabic), with weight fallbacks and lazily-loaded RTL sheets; DejaVu Sans is
+  bundled as the fallback.
+- **Input — macOS desktop**: real native text input — AppKit `NSTextField` /
+  `NSTextView` (native IME, caret/selection, padding & font parity). Enter
+  keeps the editing session (implicit form submit); blur / focus-move / Tab
+  ends it.
+- **Input — web (`nv web`)**: the browser's own `<input>` (no blitz).
+- **Input — wasm**: an HTML `<input>` / `<textarea>` overlay is positioned
+  over the blitz canvas (browser-native IME + CJK composition); the canvas
+  skips painting the mirrored text during the session and the final value
+  commits on blur.
+
 ## Quick start
 
 Prerequisites: Node.js ≥ 24, pnpm, Rust stable (with `wasm32-unknown-unknown`
