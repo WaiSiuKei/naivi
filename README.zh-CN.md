@@ -81,10 +81,10 @@ npx nv wasm   # 构建 guest 并启动宿主 → http://localhost:8090
 ```sh
 cd examples/naivi/counter
 npx nv desktop
-# `--release` 打包 macOS .app 到 release/<name>.app（name 来自 naive.config.ts）
+# `--release` 打包 macOS .app 到 release/<name>.app（name 来自 naivi.config.ts）
 ```
 
-桌面 `main` 入口（`naive.config.ts` 的 `main`，如 `app/main.ts`）是 Electron
+桌面 `main` 入口（`naivi.config.ts` 的 `main`，如 `app/main.ts`）是 Electron
 风格的主进程：`app.whenReady()` + `NaiveWindow` 创建窗口并加载 `index.html`。
 
 ## npm 包

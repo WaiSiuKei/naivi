@@ -1,4 +1,4 @@
-// Project config (`naive.config.ts`) schema, helpers, and loader (plans 045,
+// Project config (`naivi.config.ts`) schema, helpers, and loader (plans 045,
 // 046, 047).
 //
 // The config is the project-level source of truth: `name` (packaged app name,
@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfigFromFile, type UserConfig } from 'vite';
 
-/** A page declared in `naive.config.ts` (`pages` entry, plan 047 R3). */
+/** A page declared in `naivi.config.ts` (`pages` entry, plan 047 R3). */
 export interface NaivePageConfig {
   /** HTML entry, e.g. `index.html`. */
   entry: string;
@@ -40,7 +40,7 @@ export interface NaiveConfig {
   pages?: NaivePageConfig[];
 }
 
-/** Typed helper for `naive.config.ts` authors (plan 047, R1). */
+/** Typed helper for `naivi.config.ts` authors (plan 047, R1). */
 export function defineNaiveConfig(config: NaiveConfig): NaiveConfig {
   return config;
 }
@@ -50,7 +50,7 @@ export function defineViteConfig(config: UserConfig): UserConfig {
   return config;
 }
 
-/** A loaded `naive.config.ts`; which fields are required depends on command. */
+/** A loaded `naivi.config.ts`; which fields are required depends on command. */
 export interface LoadedNaiveConfig {
   /** Present when the config declares it (required for `--release`). */
   name?: string;
@@ -90,19 +90,19 @@ export function findIndexHtmlPage(
   const page = pages.find((p) => normalizePageEntry(p.entry) === 'index.html');
   if (!page) {
     throw new Error(
-      `${commandLabel}: naive.config.ts \`pages\` must include a page whose \`entry\` is index.html`,
+      `${commandLabel}: naivi.config.ts \`pages\` must include a page whose \`entry\` is index.html`,
     );
   }
   return page;
 }
 
-/** Load the project's `naive.config.ts` with command-aware validation. */
+/** Load the project's `naivi.config.ts` with command-aware validation. */
 export async function loadNaiveConfig(
   cwd: string,
   options: LoadNaiveConfigOptions = {},
 ): Promise<LoadedNaiveConfig> {
   const commandLabel = options.commandLabel ?? 'naive desktop';
-  const configFile = join(cwd, 'naive.config.ts');
+  const configFile = join(cwd, 'naivi.config.ts');
   if (!existsSync(configFile)) {
     throw new Error(`${commandLabel}: ${configFile} not found`);
   }
@@ -113,19 +113,19 @@ export async function loadNaiveConfig(
   );
   const config = (loaded?.config ?? {}) as NaiveConfig;
   if (options.requireMain && (typeof config.main !== 'string' || config.main.trim().length === 0)) {
-    throw new Error(`${commandLabel}: naive.config.ts must declare a non-empty \`main\``);
+    throw new Error(`${commandLabel}: naivi.config.ts must declare a non-empty \`main\``);
   }
   if (options.requireName && (typeof config.name !== 'string' || config.name.trim().length === 0)) {
-    throw new Error(`${commandLabel}: naive.config.ts must declare a non-empty \`name\``);
+    throw new Error(`${commandLabel}: naivi.config.ts must declare a non-empty \`name\``);
   }
   if (options.requirePages) {
     if (!Array.isArray(config.pages) || config.pages.length === 0) {
-      throw new Error(`${commandLabel}: naive.config.ts must declare a non-empty \`pages\``);
+      throw new Error(`${commandLabel}: naivi.config.ts must declare a non-empty \`pages\``);
     }
     for (const page of config.pages) {
       if (!page || typeof page.entry !== 'string' || page.entry.trim().length === 0) {
         throw new Error(
-          `${commandLabel}: naive.config.ts \`pages\` entries must declare a non-empty \`entry\``,
+          `${commandLabel}: naivi.config.ts \`pages\` entries must declare a non-empty \`entry\``,
         );
       }
       // Plan 049 R1: width/height are both-or-neither; declared values must be
@@ -135,23 +135,23 @@ export async function loadNaiveConfig(
       const hasHeight = page.height !== undefined;
       if (hasWidth !== hasHeight) {
         throw new Error(
-          `${commandLabel}: naive.config.ts \`pages\` entry \`${page.entry}\` must declare both \`width\` and \`height\` or neither`,
+          `${commandLabel}: naivi.config.ts \`pages\` entry \`${page.entry}\` must declare both \`width\` and \`height\` or neither`,
         );
       }
       if (hasWidth) {
         if (typeof page.width !== 'number' || !Number.isFinite(page.width) || page.width <= 0) {
           throw new Error(
-            `${commandLabel}: naive.config.ts \`pages\` entry \`${page.entry}\` \`width\` must be a finite positive number`,
+            `${commandLabel}: naivi.config.ts \`pages\` entry \`${page.entry}\` \`width\` must be a finite positive number`,
           );
         }
         if (typeof page.height !== 'number' || !Number.isFinite(page.height) || page.height <= 0) {
           throw new Error(
-            `${commandLabel}: naive.config.ts \`pages\` entry \`${page.entry}\` \`height\` must be a finite positive number`,
+            `${commandLabel}: naivi.config.ts \`pages\` entry \`${page.entry}\` \`height\` must be a finite positive number`,
           );
         }
         if (normalizePageEntry(page.entry) !== 'index.html') {
           console.warn(
-            `${commandLabel}: naive.config.ts \`pages\` entry \`${page.entry}\` declares \`width\`/\`height\`, but only the \`index.html\` page's size takes effect`,
+            `${commandLabel}: naivi.config.ts \`pages\` entry \`${page.entry}\` declares \`width\`/\`height\`, but only the \`index.html\` page's size takes effect`,
           );
         }
       }

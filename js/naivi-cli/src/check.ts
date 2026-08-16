@@ -353,7 +353,7 @@ export function renderReport(report: CheckReport): string {
  * in runCssSubsetCheck. Rationale: Tailwind v4's oxide candidate scanner
  * extracts utility names from ANY scanned text — including comments/strings
  * in config and source files — so a stray word (verified: todomvc's
- * naive.config.ts comment "no fixed width/height" → `.fixed { position:
+ * naivi.config.ts comment "no fixed width/height" → `.fixed { position:
  * fixed }`) compiles into a rule no element ever uses. That generated,
  * un-authored, template-unused utility is not author-chosen CSS (KTD3
  * spirit) and flagging it would over-claim the engine gap. Non-utility
@@ -553,7 +553,7 @@ function mergeAuthorFindings(target: Finding[], source: Finding[]): void {
  * Tailwind v4's oxide candidate scanner extracts utility names from ANY
  * scanned text — including comments/strings in config and source files — so
  * a stray word compiles into a real utility rule that no element ever uses
- * (verified: todomvc's naive.config.ts comment "no fixed width/height"
+ * (verified: todomvc's naivi.config.ts comment "no fixed width/height"
  * generates a `.fixed { position: fixed }` rule no template references).
  * Flagging that rule over-claims: it is generated output outside author CSS
  * and is never applied by the app.

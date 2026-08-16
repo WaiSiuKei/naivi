@@ -1,6 +1,6 @@
 // Naive Vite configuration construction (plans 039, 047, 065).
 //
-// The wasm pipeline reads the page's vite config from `naive.config.ts`
+// The wasm pipeline reads the page's vite config from `naivi.config.ts`
 // `pages` (plan 047 R4/KTD4) and merges it with the naive defaults. A
 // standalone `vite.config.ts` is no longer discovered anywhere (R2): the
 // merged config pins `configFile: false`. User-declared vue/vueJsx plugins
@@ -25,7 +25,7 @@ import { findRoot } from "./compile.ts";
 import { findIndexHtmlPage, loadNaiveConfig, type NaivePageConfig } from "./config.ts";
 
 export interface ResolveNaiveViteConfigOptions {
-  /** Project root containing the `naive.config.ts`. */
+  /** Project root containing the `naivi.config.ts`. */
   cwd: string;
   /** The selected page's declared vite config from `pages[].vite` (R3). */
   pageViteConfig?: UserConfig;
@@ -163,7 +163,7 @@ function naiveDevtoolsPlugin(cwd: string): Plugin {
 }
 
 /**
- * Load the wasm/web page from `naive.config.ts` (plan 047 U2/U3, plan 049
+ * Load the wasm/web page from `naivi.config.ts` (plan 047 U2/U3, plan 049
  * U2): requires `pages`, selects the `index.html` page (KTD3), and returns
  * its declared vite config plus optional fixed size.
  */
@@ -178,7 +178,7 @@ export async function loadPageViteConfig(
 
 /**
  * Build the `naive web` server config (plan 047 U3/KTD5, plan 049 U2):
- * loads the `index.html` page's vite config from `naive.config.ts` (pages
+ * loads the `index.html` page's vite config from `naivi.config.ts` (pages
  * required, R6), derives the page size internally (KTD1), and returns a
  * passthrough server config — the page's own plugins, no naive plugin
  * injection, `configFile` disabled, page size injected via `define`. The
@@ -332,7 +332,7 @@ function naiveCssDropPlugin(): Plugin {
 }
 
 export interface ResolveDesktopViteConfigOptions {
-  /** Project root containing the `naive.config.ts`. */
+  /** Project root containing the `naivi.config.ts`. */
   cwd: string;
   /** The selected page's declared vite config from `pages[].vite`. */
   pageViteConfig?: UserConfig;

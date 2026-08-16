@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "naive.config.ts"]
+  "include": ["src", "naivi.config.ts"]
 }

@@ -174,11 +174,11 @@ export function hostStyleError(html: string, projectRoot: string): string | null
 
 /** Read the project's `index.html` and validate it; throws on failure. */
 export function validateHostStyles(cwd: string, commandLabel: string): void {
-  // Only naive-rendered projects (those with a `naive.config.ts`) require the
+  // Only naive-rendered projects (those with a `naivi.config.ts`) require the
   // host-page contract. A pure Vite project run through `naive web` is a
   // passthrough — its `index.html` is a normal web page and must not be
   // flagged (plan 056, R7 scope).
-  if (!existsSync(join(cwd, "naive.config.ts"))) return;
+  if (!existsSync(join(cwd, "naivi.config.ts"))) return;
   const htmlPath = join(cwd, "index.html");
   if (!existsSync(htmlPath)) return; // no host page — nothing to validate
   let html: string;

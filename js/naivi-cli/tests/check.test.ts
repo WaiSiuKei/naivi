@@ -540,7 +540,7 @@ describe('runCssSubsetCheck — author-CSS 3d merge (KTD3)', () => {
 describe('runCssSubsetCheck — Tailwind 产物豁免 (U4 calibration)', () => {
   it('exempts a generated utility class that no template uses and is not authored (KC1202 .fixed)', () => {
     // Mirrors the todomvc case: Tailwind's oxide scanner picked `fixed` out
-    // of a naive.config.ts comment and compiled `.fixed { position: fixed }`,
+    // of a naivi.config.ts comment and compiled `.fixed { position: fixed }`,
     // but no template uses the class and no author CSS declares it — the
     // rule is generated cruft, never applied by the app.
     const dir = makeFixture({

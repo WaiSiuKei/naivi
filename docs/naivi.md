@@ -34,7 +34,7 @@ demo. There are no per-demo host crates: `nv wasm --release` drops the
 demo's guest into `packages/naivi-wasm/assets/guest/`, and `nv desktop`
 runs `naivi-native` with the demo's main + page bundles.
 
-The desktop `main` entry (from `naive.config.ts` `main`, e.g. `app/main.ts`)
+The desktop `main` entry (from `naivi.config.ts` `main`, e.g. `app/main.ts`)
 is the Electron-style main process: `app.whenReady()` + `NaiveWindow` drive
 window creation and page loading. The CLI bundles it into `main-bundle.js`
 (`@naivi/runtime` aliased to the desktop-main API) and the page entry into

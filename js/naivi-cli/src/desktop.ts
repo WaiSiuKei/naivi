@@ -1,7 +1,7 @@
 // Desktop pipeline for `nv desktop` (plan 072, U5; main/page split).
 //
 // 1. compileIfNeeded → `node_modules/.naive/styles.css` (shared pipeline).
-// 2. Vite: bundle the MAIN entry (from `naive.config.ts` `main`) into
+// 2. Vite: bundle the MAIN entry (from `naivi.config.ts` `main`) into
 //    `main-bundle.js`, aliasing `@naivi/runtime` to the desktop-main API
 //    (`app.whenReady()` + `NaiveWindow`) and baking the window size in as
 //    `__NAIVE_WINDOW_SIZE__`.
@@ -195,7 +195,7 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
     // U7: macOS .app packaging. `name` is guaranteed by requireName above;
     // the guard narrows the optional type.
     if (!config.name) {
-      throw new Error(`${commandLabel}: naive.config.ts must declare \`name\``);
+      throw new Error(`${commandLabel}: naivi.config.ts must declare \`name\``);
     }
     await packageDesktopApp(root, cwd, config.name, {
       mainBundlePath,
@@ -241,7 +241,7 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
 /**
  * macOS .app packaging for `nv desktop --release` (plan 065, U7 — macOS
  * first). Assembles `release/<name>.app` (name kebab-cased from
- * `naive.config.ts` `name`, e.g. "Naivi TodoMVC" → `naivi-todomvc.app`):
+ * `naivi.config.ts` `name`, e.g. "Naivi TodoMVC" → `naivi-todomvc.app`):
  *
  *   Contents/
  *     Info.plist            — name / display name / bundle id / launcher

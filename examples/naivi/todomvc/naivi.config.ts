@@ -1,7 +1,7 @@
 // naivi todomvc demo config — mirrors the counter demo: a `pages` entry with
 // the index.html page, fill mode (no fixed width/height), and the vue +
-// tailwind plugins. The config-file name stays `naive.config.ts` so
-// `loadNaiveConfig` keeps discovering it unchanged.
+// tailwind plugins. The config-file name is `naivi.config.ts`, discovered
+// by `loadNaiveConfig`.
 //
 // The CLI owns the naivi-managed vite defaults — `optimizeDeps.exclude` for
 // the runtime's `@vite-ignore`'d wasm import, and `server.fs.allow` for the

@@ -24,7 +24,7 @@ Usage:
 
 async function cmdWeb(_root: string, cwd: string, parsed: ParsedCommand) {
   // Pure Vite passthrough — no naive compilation, no WASM, no naive plugins.
-  // Reads the `index.html` page's vite config from `naive.config.ts` (plan
+  // Reads the `index.html` page's vite config from `naivi.config.ts` (plan
   // 047, R5/KTD5); a standalone vite.config.ts is never loaded (R2). The only
   // naive addition is the `__NAIVE_PAGE_SIZE__` define (plan 049 KTD1).
   if (parsed.release) {

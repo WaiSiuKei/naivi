@@ -86,10 +86,10 @@ npx nv wasm   # build guest + serve host → http://localhost:8090
 ```sh
 cd examples/naivi/counter
 npx nv desktop
-# `--release` packages a macOS .app into release/<name>.app (name from naive.config.ts)
+# `--release` packages a macOS .app into release/<name>.app (name from naivi.config.ts)
 ```
 
-The desktop `main` entry (`app/main.ts` from `naive.config.ts`) is the
+The desktop `main` entry (`app/main.ts` from `naivi.config.ts`) is the
 Electron-style main process: `app.whenReady()` + `NaiveWindow` create the
 window and load `index.html`.
 
