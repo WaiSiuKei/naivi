@@ -92,6 +92,7 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
     console.log(C.dim('[naivi] Building wasm host (trunk build --release)...'));
     execFileSync('trunk', ['build', '--release'], { cwd: trunkCrateDir, stdio: 'inherit' });
     console.log(C.ok(`Wasm host → ${join(trunkCrateDir, 'dist')}`));
+    console.log(C.ok(`  deployable static site (wasm engine + guest) — serve this directory`));
     return;
   }
 
@@ -147,6 +148,14 @@ async function buildWasmSite(root: string, cwd: string) {
   // process.exit(1) (KTD5).
   const stylesCss = await compileIfNeeded(cwd);
   runCssSubsetCheck(cwd);
+
+  // The guest is an INTERMEDIATE build artifact — it only becomes a runnable
+  // app once copied into the shared trunk host (packages/naivi-wasm). Emit it
+  // under node_modules/.naive (like the desktop bundles) so a stray,
+  // non-deployable `dist/` never appears in the demo dir and gets mistaken
+  // for the wasm output. The deployable site is packages/naivi-wasm/dist.
+  const guestOutDir = join(cwd, 'node_modules', '.naive', 'guest');
+  config.build = { ...(config.build ?? {}), outDir: guestOutDir };
 
   await build(config);
 
