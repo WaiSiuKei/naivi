@@ -20,6 +20,7 @@
 // (`packageDesktopApp`).
 
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'vite';
@@ -27,6 +28,8 @@ import { runCssSubsetCheck } from './check.ts';
 import { C, compileIfNeeded } from './compile.ts';
 import { findIndexHtmlPage, loadNaiveConfig } from './config.ts';
 import { loadPageViteConfig, pageSizeOf, resolveDesktopViteConfig } from './vite-config.ts';
+
+const require = createRequire(import.meta.url);
 
 /** Extract a quoted attribute value from a lowercase tag. */
 function extractAttr(tag: string, name: string): string | null {
@@ -95,9 +98,8 @@ function resolveMainEntry(cwd: string, main: string): string {
  * Supports both `.tsx` (jsx transform) and `.vue` SFC (via the page's vue
  * plugins, plan 058 U2/KTD1). Reuses the page's `pages[].vite` config through
  * the shared desktop-mode builder (plan 065, U2). */
-export async function buildDesktopBundle(root: string, cwd: string, entry: string): Promise<string> {
-  const runtimeSrc = join(root, 'js', 'naivi-runtime', 'src');
-  const desktopEntry = join(runtimeSrc, 'desktop-entry.ts');
+export async function buildDesktopBundle(root: string | null, cwd: string, entry: string): Promise<string> {
+  const desktopEntry = resolveRuntimeModule(root, 'desktop-entry.ts', cwd);
   const outfile = join(cwd, 'node_modules', '.naive', 'page-bundle.js');
 
   const page = await loadPageViteConfig(cwd, 'nv desktop');
@@ -121,13 +123,12 @@ export async function buildDesktopBundle(root: string, cwd: string, entry: strin
  * sizes the native window from config without main-code plumbing (plan 057
  * KTD1). */
 export async function buildDesktopMainBundle(
-  root: string,
+  root: string | null,
   cwd: string,
   mainEntry: string,
   windowSize: { width: number; height: number },
 ): Promise<string> {
-  const runtimeSrc = join(root, 'js', 'naivi-runtime', 'src');
-  const desktopMain = join(runtimeSrc, 'desktop-main.ts');
+  const desktopMain = resolveRuntimeModule(root, 'desktop-main.ts', cwd);
   const outfile = join(cwd, 'node_modules', '.naive', 'main-bundle.js');
 
   const page = await loadPageViteConfig(cwd, 'nv desktop');
@@ -146,7 +147,58 @@ export async function buildDesktopMainBundle(
   return outfile;
 }
 
-export async function cmdDesktopImpl(root: string, cwd: string, release: boolean): Promise<void> {
+/** Resolve a `@naivi/runtime` source module: the monorepo source tree when a
+ * root is known, else the installed package's subpath export (standalone).
+ * The runtime is a dependency of the APP, so standalone resolution starts
+ * from the project cwd (npm hoists it into the project's node_modules). */
+function resolveRuntimeModule(root: string | null, rel: string, cwd: string): string {
+  if (root) return join(root, 'js', 'naivi-runtime', 'src', rel);
+  const subpath = rel.replace(/\.ts$/, ''); // desktop-entry.ts → @naivi/runtime/desktop-entry
+  try {
+    return createRequire(join(cwd, '__nv_resolve__.cjs')).resolve(`@naivi/runtime/${subpath}`);
+  } catch {
+    throw new Error(
+      `nv desktop: could not resolve @naivi/runtime/${subpath} — install the app's @naivi/runtime dependency (>= 0.0.2)`,
+    );
+  }
+}
+
+/** The npm optional-dependency key for the current platform (e.g. darwin-x64). */
+function nativePlatformKey(): string {
+  return `${process.platform}-${process.arch}`;
+}
+
+/** Resolve the native host binary. Monorepo: `cargo build` the crate (when
+ * `build`) and use `target/release/naivi-native`. Standalone: the prebuilt
+ * `@naivi/native-<platform>` package binary from node_modules. */
+function resolveNativeBinary(root: string | null, build = false): string {
+  if (root) {
+    if (build) {
+      console.log(C.dim('[naivi] Building native host (cargo build --release -p naivi-native)...'));
+      execFileSync('cargo', ['build', '--release', '-p', 'naivi-native'], {
+        cwd: root,
+        stdio: 'inherit',
+      });
+    }
+    const hostBinary = join(root, 'target', 'release', 'naivi-native');
+    if (!existsSync(hostBinary)) {
+      throw new Error(`nv desktop: native host binary not found at ${hostBinary}`);
+    }
+    return hostBinary;
+  }
+  const key = nativePlatformKey();
+  const pkg = `@naivi/native-${key}`;
+  try {
+    return require.resolve(`${pkg}/naivi-native`);
+  } catch {
+    throw new Error(
+      `nv desktop: no prebuilt native host for this platform (${key}) — ` +
+        `install @naivi/cli with its @naivi/native-${key} optional dependency, or run inside the naivi monorepo.`,
+    );
+  }
+}
+
+export async function cmdDesktopImpl(root: string | null, cwd: string, release: boolean): Promise<void> {
   // R11: main is mandatory for desktop (requireMain); pages with an
   // index.html page are required too, matching wasm/web. `--release` also
   // requires `name` — it names the .app bundle (U7).
@@ -193,34 +245,37 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
 
   if (release) {
     // U7: macOS .app packaging. `name` is guaranteed by requireName above;
-    // the guard narrows the optional type.
+    // the guard narrows the optional type. `resolveNativeBinary(root, true)`
+    // builds the host from source in the monorepo, or resolves the prebuilt
+    // platform binary when standalone.
     if (!config.name) {
       throw new Error(`${commandLabel}: naivi.config.ts must declare \`name\``);
     }
-    await packageDesktopApp(root, cwd, config.name, {
+    const hostBinary = resolveNativeBinary(root, true);
+    await packageDesktopApp(cwd, config.name, {
       mainBundlePath,
       pageBundlePath,
       stylesPath,
-    });
+    }, hostBinary);
     return;
   }
 
-  // The native host is a SINGLE shared generic crate (`naivi-native`): it
+  // The native host is a SINGLE shared generic host (`naivi-native`): it
   // evals the main bundle (app.whenReady → NaiveWindow.loadFile → page
   // bundle) for whichever demo's bundles it is handed. No per-demo host
-  // crates — `nv desktop` works for any demo.
+  // crates — `nv desktop` works for any demo. In the monorepo it runs via
+  // cargo (auto-build); standalone it runs the prebuilt
+  // `@naivi/native-<platform>` binary from node_modules.
   const nativeCrate = 'naivi-native';
   const guestArgs = [mainBundlePath, pageBundlePath, stylesPath, cwd];
-  console.log(
-    C.dim(`[naivi] Running guest: cargo run -p ${nativeCrate} -- ${guestArgs.join(' ')}`),
-  );
+  const cmd = root
+    ? { file: 'cargo', args: ['run', '-p', nativeCrate, '--', ...guestArgs], cwd: root }
+    : { file: resolveNativeBinary(null), args: guestArgs };
+  console.log(C.dim(`[naivi] Running guest: ${cmd.file} ${cmd.args.join(' ')}`));
   // Blocking: the guest owns the window event loop until it closes. Pass argv
   // directly (no shell interpolation) so paths with $/backticks/quotes work.
   try {
-    execFileSync('cargo', ['run', '-p', nativeCrate, '--', ...guestArgs], {
-      cwd: root,
-      stdio: 'inherit',
-    });
+    execFileSync(cmd.file, cmd.args, { ...(cmd.cwd ? { cwd: cmd.cwd } : {}), stdio: 'inherit' });
   } catch (error) {
     // Ctrl+C (or an external kill) sends a signal to the whole process group;
     // the guest's signal-terminated exit makes execFileSync throw. That is a
@@ -257,10 +312,10 @@ export async function cmdDesktopImpl(root: string, cwd: string, release: boolean
  * Launch with `open release/<name>.app`.
  */
 export async function packageDesktopApp(
-  root: string,
   cwd: string,
   name: string,
   bundles: { mainBundlePath: string; pageBundlePath: string; stylesPath: string },
+  hostBinary: string,
 ): Promise<void> {
   const kebab =
     name
@@ -269,18 +324,8 @@ export async function packageDesktopApp(
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'naive-app';
 
-  // Build the shared native host as a release binary (no per-demo host
-  // crates — the same binary serves every app).
-  console.log(C.dim('[naivi] Building native host (cargo build --release -p naivi-native)...'));
-  execFileSync('cargo', ['build', '--release', '-p', 'naivi-native'], {
-    cwd: root,
-    stdio: 'inherit',
-  });
-  const hostBinary = join(root, 'target', 'release', 'naivi-native');
-  if (!existsSync(hostBinary)) {
-    throw new Error(`nv desktop --release: native host binary not found at ${hostBinary}`);
-  }
-
+  // The host binary is resolved by the caller: cargo-built in the monorepo,
+  // or the prebuilt `@naivi/native-<platform>` binary when standalone.
   const appDir = join(cwd, 'release', `${kebab}.app`);
   const macosDir = join(appDir, 'Contents', 'MacOS');
   const resourcesDir = join(appDir, 'Contents', 'Resources');

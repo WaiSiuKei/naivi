@@ -1,6 +1,6 @@
 {
   "name": "@naivi/runtime",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "description": "Vue Vapor runtime adapter for naive — bridges DOM-style API to WASM Renderer API",
   "license": "MIT OR Apache-2.0",
@@ -34,6 +34,10 @@
     "./desktop-main": {
       "types": "./dist/desktop-main.d.ts",
       "default": "./dist/desktop-main.js"
+    },
+    "./desktop-entry": {
+      "types": "./dist/desktop-entry.d.ts",
+      "default": "./dist/desktop-entry.js"
     }
   },
   "files": [

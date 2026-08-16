@@ -1,0 +1,30 @@
+{
+  "name": "@naivi/native-darwin-x64",
+  "version": "0.0.1",
+  "description": "Prebuilt naivi-native desktop host for macOS x64 — lets `nv desktop` run from a standalone npm install without cargo / a Rust toolchain",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaiSiuKei/naivi.git",
+    "directory": "js/naivi-native-darwin-x64"
+  },
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": [
+    "naivi-native",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "pnpm build"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

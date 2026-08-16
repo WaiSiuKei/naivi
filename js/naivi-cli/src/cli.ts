@@ -303,7 +303,7 @@ import('./guest.bundle.js');
 `;
 }
 
-async function cmdDesktop(root: string, cwd: string, parsed: ParsedCommand) {
+async function cmdDesktop(root: string | null, cwd: string, parsed: ParsedCommand) {
   const { cmdDesktopImpl } = await import('./desktop.ts');
   await cmdDesktopImpl(root, cwd, parsed.release);
 }
@@ -331,31 +331,23 @@ async function main() {
     return;
   }
 
-  // `nv wasm` also runs standalone: without the monorepo it uses the
-  // prebuilt `@naivi/wasm-host` package (no trunk / Rust toolchain). Desktop
-  // still needs the monorepo — the `naivi-native` binary is distributed
-  // separately (pending).
+  // `nv wasm` and `nv desktop` also run standalone: without the monorepo they
+  // use the prebuilt `@naivi/wasm-host` / `@naivi/native-<platform>` packages
+  // (no trunk / Rust toolchain).
   if (parsed.command === 'wasm') {
     validateHostStyles(cwd, 'nv wasm');
     await cmdWasm(findRoot(), cwd, parsed);
     return;
   }
-
-  const root = findRoot();
-  if (!root) {
-    console.error('nv: could not find the blitz monorepo root (Cargo.toml with a [workspace] containing naivi-dom).');
-    process.exit(1);
-  }
-
-  validateHostStyles(cwd, `nv ${parsed.command}`);
-
   if (parsed.command === 'desktop') {
-    await cmdDesktop(root, cwd, parsed);
-  } else {
-    console.error(`nv: unknown command \`${parsed.command}\`.`);
-    console.log(HELP_TEXT);
-    process.exit(1);
+    validateHostStyles(cwd, 'nv desktop');
+    await cmdDesktop(findRoot(), cwd, parsed);
+    return;
   }
+
+  console.error(`nv: unknown command \`${parsed.command}\`.`);
+  console.log(HELP_TEXT);
+  process.exit(1);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
