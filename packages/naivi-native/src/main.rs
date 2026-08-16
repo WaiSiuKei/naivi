@@ -1,9 +1,9 @@
 //! naivi-native — generic native host (U5).
 //!
 //! A winit entry that runs ANY naivi (Vue Vapor) demo through the rquickjs
-//! guest into blitz-dom (stylo + taffy + parley), rendered by the VelloHybrid
-//! renderer in a native window. The demo is selected by the CLI; there are no
-//! per-demo host crates.
+//! guest into blitz-dom (stylo + taffy + parley), rendered by the pure-GPU
+//! Vello renderer (anyrender_vello, wgpu/Metal) in a native window. The demo
+//! is selected by the CLI; there are no per-demo host crates.
 //!
 //! Usage (main/page split, primary — `nv desktop`):
 //! `naivi-native <main-bundle.js> <page-bundle.js> [styles.css] [project-dir]`
@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::task::Context as TaskContext;
 
-use anyrender_vello_hybrid::VelloHybridWindowRenderer;
+use anyrender_vello::VelloWindowRenderer;
 use blitz_dom::{BaseDocument, DocGuard, DocGuardMut, Document, DocumentConfig};
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use blitz_traits::events::UiEvent;
@@ -262,7 +262,7 @@ fn main() {
 
     let event_loop = create_default_event_loop();
     let (proxy, rx) = BlitzShellProxy::new(event_loop.create_proxy());
-    let renderer = VelloHybridWindowRenderer::new();
+    let renderer = VelloWindowRenderer::new();
     let handle = DocHandle::new(doc, Rc::clone(&guest));
     // Register the macOS native text-input backend factory (U4). The factory
     // runs inside the shell's window construction — where the winit window
@@ -288,7 +288,7 @@ fn main() {
         },
     ));
 
-    let mut app = BlitzApplication::<VelloHybridWindowRenderer>::new(proxy, rx);
+    let mut app = BlitzApplication::<VelloWindowRenderer>::new(proxy, rx);
     app.add_window(window);
 
     // Main/page split: resolve `app.whenReady()` now — the main's

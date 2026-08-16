@@ -19,7 +19,7 @@ naivi-dom = { path = "../naivi-dom", features = ["quickjs"] }
 naivi-guest-quickjs = { path = "../naivi-guest-quickjs" }
 
 # blitz engine + shell + renderer
-anyrender_vello_hybrid = { workspace = true }
+anyrender_vello = { workspace = true }
 blitz-dom = { workspace = true, features = ["system-fonts"] }
 blitz-shell = { workspace = true, default-features = false, features = ["tracing"] }
 blitz-traits = { workspace = true }

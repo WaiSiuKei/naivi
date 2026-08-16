@@ -4666,7 +4666,7 @@ dependencies = [
 name = "naivi-native"
 version = "0.0.0"
 dependencies = [
- "anyrender_vello_hybrid",
+ "anyrender_vello",
  "blitz-dom",
  "blitz-shell",
  "blitz-traits",
