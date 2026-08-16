@@ -1,3 +1,5 @@
+**English** | [简体中文](./README.zh-CN.md)
+
 # naivi
 
 **Vue Vapor frontend on the [blitz](https://github.com/DioxusLabs/blitz) browser engine.**
@@ -48,6 +50,7 @@ pnpm -r test
 ```sh
 cd examples/naivi/counter
 npx nv web
+# `--release` builds the plain static site into dist/
 ```
 
 ### Wasm (blitz in the browser via trunk)
@@ -55,7 +58,7 @@ npx nv web
 ```sh
 cd examples/naivi/counter
 npx nv wasm   # build guest + serve host → http://localhost:8090
-# `--release` builds the deployable site (wasm engine + guest) into dist/
+# `--release` builds the deployable wasm site (engine + guest) into dist/
 ```
 
 ### Native (blitz in a winit window via QuickJS)
@@ -63,6 +66,7 @@ npx nv wasm   # build guest + serve host → http://localhost:8090
 ```sh
 cd examples/naivi/counter
 npx nv desktop
+# `--release` packages a macOS .app into release/<name>.app (name from naive.config.ts)
 ```
 
 The desktop `main` entry (`app/main.ts` from `naive.config.ts`) is the
