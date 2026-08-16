@@ -2,13 +2,17 @@
 // @naivi/cli — naivi toolchain CLI.
 // Usage: npx nv web | npx nv wasm [--release] | npx nv desktop [--release]
 
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
-import { join } from 'node:path';
+import { createServer as createHttpServer } from 'node:http';
+import { createRequire } from 'node:module';
+import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { C, findRoot } from './compile.ts';
 import { parseCommand, TRUNK_PORT, type ParsedCommand } from './command.ts';
 import { validateHostStyles } from './host-style.ts';
 import { createServer } from 'vite';
+
+const require = createRequire(import.meta.url);
 
 const HELP_TEXT = `nv — naivi Vue Vapor CLI
 
@@ -69,6 +73,80 @@ function processCommand(pid: number): string {
 }
 
 /**
+ * Resolve the wasm host working directory.
+ *
+ * - Monorepo (`root` found): `packages/naivi-wasm` — the trunk crate; the
+ *   CLI injects the guest into its `assets/guest` and trunk builds/serves it.
+ * - Standalone (no monorepo): the prebuilt `@naivi/wasm-host` package. Its
+ *   `dist/` is a ready-to-serve static site (engine wasm + host page); the
+ *   CLI copies it to a writable working dir under `node_modules/.naive` so
+ *   the per-demo guest can be injected (node_modules may be read-only, e.g.
+ *   the pnpm store), then serves/copies that directly — no trunk, no Rust.
+ */
+function resolveWasmHost(root: string | null, cwd: string): { dir: string; standalone: boolean } {
+  if (root) {
+    return { dir: join(root, 'packages', 'naivi-wasm'), standalone: false };
+  }
+  let hostPkg: string;
+  try {
+    hostPkg = dirname(require.resolve('@naivi/wasm-host/package.json'));
+  } catch {
+    throw new Error(
+      'nv wasm: no naivi monorepo found and `@naivi/wasm-host` is not installed — ' +
+        'install it with `npm i -D @naivi/wasm-host` to run wasm standalone.',
+    );
+  }
+  const work = join(cwd, 'node_modules', '.naive', 'wasm-host');
+  rmSync(work, { recursive: true, force: true });
+  mkdirSync(dirname(work), { recursive: true });
+  // Copy the package's dist/ (the ready-to-serve static site) — not the
+  // package itself, which would drag in package.json/LICENSE/scripts and a
+  // nested dist/.
+  cpSync(join(hostPkg, 'dist'), work, { recursive: true });
+  return { dir: work, standalone: true };
+}
+
+const STATIC_MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.woff2': 'font/woff2',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+};
+
+/** Serve a static directory (standalone wasm host). Blocking until Ctrl+C. */
+function serveStatic(dir: string, port: number): void {
+  const root = resolve(dir);
+  const server = createHttpServer((req, res) => {
+    let path = normalize(join(root, decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname)));
+    if (!path.startsWith(root)) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return;
+    }
+    if (!existsSync(path) || statSync(path).isDirectory()) {
+      path = join(path, 'index.html');
+    }
+    if (!existsSync(path)) {
+      res.writeHead(404);
+      res.end('not found');
+      return;
+    }
+    const type = STATIC_MIME[extname(path)] ?? 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': type });
+    res.end(readFileSync(path));
+  });
+  server.listen(port, () => {
+    console.log(C.ok(`nv wasm → http://localhost:${port}`));
+  });
+}
+
+/**
  * `nv wasm` — the ONE command for the full wasm flow.
  *
  * 1. Build the demo's guest JS into the SHARED trunk host
@@ -84,33 +162,50 @@ function processCommand(pid: number): string {
  * Release (`nv wasm --release`): also `trunk build --release` the host so
  * `packages/naivi-wasm/dist` is a deployable static site.
  */
-async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
-  await buildWasmSite(root, cwd);
+async function cmdWasm(root: string | null, cwd: string, parsed: ParsedCommand) {
+  // Resolve the wasm host: the monorepo trunk crate (dev) or the prebuilt
+  // `@naivi/wasm-host` package (standalone npm install — no trunk/Rust).
+  const host = resolveWasmHost(root, cwd);
+  await buildWasmSite(cwd, host.dir);
 
-  const trunkCrateDir = join(root, 'packages', 'naivi-wasm');
   if (parsed.release) {
+    if (host.standalone) {
+      // Prebuilt host — it IS a deployable dist already (guest was just
+      // injected into its assets/guest). Copy it straight to <demo>/dist/.
+      const demoDist = join(cwd, 'dist');
+      rmSync(demoDist, { recursive: true, force: true });
+      cpSync(host.dir, demoDist, { recursive: true });
+      console.log(C.ok(`Wasm site → ${demoDist}`));
+      console.log(C.ok(`  deployable static site (wasm engine + guest) — serve this directory`));
+      return;
+    }
+    // Monorepo: compile the engine from source with trunk, then copy its
+    // dist (engine + host page + THIS demo's guest) into <demo>/dist/.
     console.log(C.dim('[naivi] Building wasm host (trunk build --release)...'));
     // --public-url ./ (also pinned in packages/naivi-wasm/Trunk.toml) keeps
     // index.html's asset URLs relative, so dist/ is portable to any base
     // path / static host / IDE preview server.
     execFileSync('trunk', ['build', '--release', '--public-url', './'], {
-      cwd: trunkCrateDir,
+      cwd: host.dir,
       stdio: 'inherit',
     });
-
-    // Assemble the deployable site into <demo>/dist/: copy the built shared
-    // host (wasm engine + host page + THIS demo's guest, which buildWasmSite
-    // just dropped into the host's assets/guest) so the demo's dist is a
-    // complete, self-contained static site — serve this directory.
     const demoDist = join(cwd, 'dist');
     rmSync(demoDist, { recursive: true, force: true });
-    cpSync(join(trunkCrateDir, 'dist'), demoDist, { recursive: true });
+    cpSync(join(host.dir, 'dist'), demoDist, { recursive: true });
     console.log(C.ok(`Wasm site → ${demoDist}`));
     console.log(C.ok(`  deployable static site (wasm engine + guest) — serve this directory`));
     return;
   }
 
   const port = parsed.port === 3000 ? TRUNK_PORT : parsed.port;
+  if (host.standalone) {
+    // Prebuilt host — no trunk needed; serve the static site directly.
+    // Blocking: the static server owns the dev port until Ctrl+C.
+    serveStatic(host.dir, port);
+    return;
+  }
+
+  // Monorepo dev: build/serve the trunk host (engine compiled from source).
   const stale = listenersOn(port).filter((pid) => processCommand(pid).includes('trunk'));
   if (stale.length > 0) {
     console.log(C.dim(`[naivi] Port ${port} held by a stale trunk host — restarting`));
@@ -122,7 +217,7 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
   execFileSync(
     'trunk',
     ['serve', '--release', '--port', String(port), '--public-url', './'],
-    { cwd: trunkCrateDir, stdio: 'inherit' },
+    { cwd: host.dir, stdio: 'inherit' },
   );
 }
 
@@ -143,7 +238,7 @@ async function cmdWasm(root: string, cwd: string, parsed: ParsedCommand) {
  * `./assets/guest/guest.js`; trunk copies `assets/` verbatim into `dist/`.
  * The host itself is built/served by `cmdWasm` (trunk build / trunk serve).
  */
-async function buildWasmSite(root: string, cwd: string) {
+async function buildWasmSite(cwd: string, hostDir: string) {
   const { build } = await import('vite');
   const { compileIfNeeded } = await import('./compile.ts');
   const { runCssSubsetCheck } = await import('./check.ts');
@@ -181,12 +276,11 @@ async function buildWasmSite(root: string, cwd: string) {
 
   const outDir = typeof config.build?.outDir === 'string' ? config.build.outDir : 'dist';
 
-  // The wasm host is a SINGLE shared generic trunk crate
-  // (`packages/naivi-wasm`): its host page loads `./assets/guest/guest.js`
-  // and serves whichever demo's guest was built last. No per-demo host crates
-  // — `nv wasm --release` works for any demo.
-  const trunkCrateDir = join(root, 'packages', 'naivi-wasm');
-  const guestDir = join(trunkCrateDir, 'assets', 'guest');
+  // The wasm host (the monorepo trunk crate OR the prebuilt `@naivi/wasm-host`
+  // working copy) loads `./assets/guest/guest.js` and serves whichever demo's
+  // guest was built last. No per-demo host crates — `nv wasm --release` works
+  // for any demo.
+  const guestDir = join(hostDir, 'assets', 'guest');
   mkdirSync(guestDir, { recursive: true });
   cpSync(join(outDir, 'guest.bundle.js'), join(guestDir, 'guest.bundle.js'));
   writeFileSync(join(guestDir, 'guest.js'), makeGuestWrapper(cssText));
@@ -237,6 +331,16 @@ async function main() {
     return;
   }
 
+  // `nv wasm` also runs standalone: without the monorepo it uses the
+  // prebuilt `@naivi/wasm-host` package (no trunk / Rust toolchain). Desktop
+  // still needs the monorepo — the `naivi-native` binary is distributed
+  // separately (pending).
+  if (parsed.command === 'wasm') {
+    validateHostStyles(cwd, 'nv wasm');
+    await cmdWasm(findRoot(), cwd, parsed);
+    return;
+  }
+
   const root = findRoot();
   if (!root) {
     console.error('nv: could not find the blitz monorepo root (Cargo.toml with a [workspace] containing naivi-dom).');
@@ -245,9 +349,7 @@ async function main() {
 
   validateHostStyles(cwd, `nv ${parsed.command}`);
 
-  if (parsed.command === 'wasm') {
-    await cmdWasm(root, cwd, parsed);
-  } else if (parsed.command === 'desktop') {
+  if (parsed.command === 'desktop') {
     await cmdDesktop(root, cwd, parsed);
   } else {
     console.error(`nv: unknown command \`${parsed.command}\`.`);

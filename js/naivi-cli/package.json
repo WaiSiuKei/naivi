@@ -1,6 +1,6 @@
 {
   "name": "@naivi/cli",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "description": "CLI for naive — build and serve Vue Vapor apps",
   "type": "module",
   "license": "MIT OR Apache-2.0",
@@ -44,6 +44,7 @@
     "test:integration": "node tests/integration-css-check.mjs"
   },
   "dependencies": {
+    "@naivi/wasm-host": "0.0.1",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vitejs/plugin-vue-jsx": "^5.1.6",
     "@vue/compiler-sfc": "^3.6.0-rc.1",

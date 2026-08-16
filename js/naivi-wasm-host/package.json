@@ -1,0 +1,29 @@
+{
+  "name": "@naivi/wasm-host",
+  "version": "0.0.1",
+  "description": "Prebuilt naivi WASM host (engine + host page) — lets `nv wasm` run from a standalone npm install without the naivi monorepo / trunk / Rust toolchain",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaiSiuKei/naivi.git",
+    "directory": "js/naivi-wasm-host"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "pnpm build"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
