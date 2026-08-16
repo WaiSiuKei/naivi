@@ -16,3 +16,5 @@
 # pnpm workspace (naivi toolchain + demos)
 /node_modules
 *.tsbuildinfo
+# naivi desktop release bundles (.app)
+**/release/

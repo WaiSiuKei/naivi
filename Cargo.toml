@@ -287,6 +287,13 @@ color = { workspace = true }
 env_logger = "0.11"
 tracing-subscriber = "0.3"
 
+# anyrender_vello is vendored (vendor/anyrender_vello) with a non-blocking
+# device poll in render() — the CPU no longer waits per frame on the GPU's
+# v-sync-paced completion, cutting the on-demand repaint cost roughly in half
+# (interaction latency, not peak throughput).
+[patch.crates-io]
+anyrender_vello = { path = "./vendor/anyrender_vello" }
+
 # [patch.crates-io]
 # anyrender = { path = "../anyrender/crates/anyrender" }
 # anyrender_skia = { path = "../anyrender/crates/anyrender_skia" }
