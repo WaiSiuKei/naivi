@@ -102,7 +102,10 @@ dioxus-cli-config = { version = "0.7.3" }
 dioxus-core-macro = { version = "0.7.3" }
 
 # Taffy + Parley + Fontations
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "864b4fd02e344bf9676f653e945161011cf93c0d", default-features = false, features = [
+# `version` on the git deps below is required for `cargo package` (crates.io
+# packaging strips the git spec and falls back to the published version); the
+# git rev pins stay authoritative for workspace builds.
+taffy = { version = "0.13", git = "https://github.com/DioxusLabs/taffy", rev = "864b4fd02e344bf9676f653e945161011cf93c0d", default-features = false, features = [
     "std",
     "flexbox",
     "grid",
@@ -115,7 +118,7 @@ taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "864b4fd02e344bf967
 # parley fork (WaiSiuKei/naivi-parley), branch `font-slice-fixes` (based on
 # coretext-backend-v0.10 + fontique multi-face/wght fixes). Refresh the rev
 # after each fork rebase (see docs/plans/2026-08-14-1015-feat-macos-coretext-text-backend-plan.md R8).
-parley = { git = "https://github.com/WaiSiuKei/naivi-parley", rev = "680123aa3d27a563f93254d472b1b47213d4bcf5", default-features = false, features = ["std"] }
+parley = { version = "0.10", git = "https://github.com/WaiSiuKei/naivi-parley", rev = "680123aa3d27a563f93254d472b1b47213d4bcf5", default-features = false, features = ["std"] }
 skrifa = { version = "0.42", default-features = false, features = [
     "std",
 ] } # Should match parley and vello versions

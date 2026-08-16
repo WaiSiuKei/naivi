@@ -1,14 +1,20 @@
 use anyrender::PaintScene;
-use blitz_dom::{BaseDocument, NodeId, node::{RasterImageData, TextBrush}, util::ToColorColor};
-use kurbo::{Affine, Rect, Stroke, Vec2};
+use blitz_dom::{BaseDocument, NodeId, node::TextBrush, util::ToColorColor};
+use kurbo::{Affine, Rect, Stroke};
 use parley::{Affinity, Cursor, GlyphRun, Layout, Line, PositionedLayoutItem, Selection};
-use peniko::{Fill, ImageAlphaType, ImageQuality};
+use peniko::Fill;
 use style::values::computed::TextDecorationLine;
 
 #[cfg(target_os = "macos")]
 use blitz_macos_text; // native CoreText glyph rasterization (naivi)
 #[cfg(target_os = "macos")]
 use crate::render::to_peniko_image;
+#[cfg(target_os = "macos")]
+use blitz_dom::node::RasterImageData;
+#[cfg(target_os = "macos")]
+use kurbo::Vec2;
+#[cfg(target_os = "macos")]
+use peniko::{ImageAlphaType, ImageQuality};
 
 use crate::color::{Color, ToColorColor as _};
 use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};

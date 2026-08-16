@@ -180,6 +180,9 @@ impl BaseDocument {
                     //
                     // TODO: smarter sizing using these (depending on object-fit, they shouldn't
                     // necessarily just override the native size)
+                    // `mut` is only needed when feature `svg` is on (the Svg arm below
+                    // reassigns attr_size) — allow to keep both feature sets warning-free.
+                    #[allow(unused_mut)]
                     let mut attr_size = taffy::Size {
                         width: element_data
                             .attr(local_name!("width"))

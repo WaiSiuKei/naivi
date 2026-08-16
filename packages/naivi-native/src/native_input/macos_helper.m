@@ -346,7 +346,9 @@ void native_input_set_value(void *handlePtr, const char *text) {
                 handle->textView.selectedRange = sel;
             } else {
                 NSTextField *field = (NSTextField *)handle->control;
-                NSTextView *editor = field.currentEditor;
+                // `currentEditor` returns `NSText * _Nullable` (the field
+                // editor base class); selectedRange/string are NSText methods.
+                NSText *editor = field.currentEditor;
                 NSRange sel = editor != nil ? editor.selectedRange : NSMakeRange(0, 0);
                 if (editor != nil) {
                     editor.string = s;
